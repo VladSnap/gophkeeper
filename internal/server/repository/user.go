@@ -27,7 +27,7 @@ func (r *UserRepository) Create(user *storage.User) error {
 
 	query := `
 		INSERT INTO users (user_id, login, password)
-		VALUES ($1, $2, $3, $4)
+		VALUES ($1, $2, $3)
 	`
 
 	_, err := r.db.Exec(query,
