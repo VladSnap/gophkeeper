@@ -26,7 +26,7 @@ func (r *UserRepository) Create(user *storage.User) error {
 	}
 
 	query := `
-		INSERT INTO users (user_id, login, password, salt)
+		INSERT INTO users (user_id, login, password)
 		VALUES ($1, $2, $3, $4)
 	`
 
@@ -34,7 +34,6 @@ func (r *UserRepository) Create(user *storage.User) error {
 		user.UserID,
 		user.Login,
 		user.Password,
-		user.Salt,
 	)
 
 	if err != nil {
@@ -47,7 +46,7 @@ func (r *UserRepository) Create(user *storage.User) error {
 // GetByID retrieves a user by its ID
 func (r *UserRepository) GetByID(userID uuid.UUID) (*storage.User, error) {
 	query := `
-		SELECT user_id, login, password, salt
+		SELECT user_id, login, password
 		FROM users
 		WHERE user_id = $1
 	`
@@ -58,7 +57,6 @@ func (r *UserRepository) GetByID(userID uuid.UUID) (*storage.User, error) {
 		&user.UserID,
 		&user.Login,
 		&user.Password,
-		&user.Salt,
 	)
 
 	if err != nil {
@@ -74,7 +72,7 @@ func (r *UserRepository) GetByID(userID uuid.UUID) (*storage.User, error) {
 // GetByLogin retrieves a user by login
 func (r *UserRepository) GetByLogin(login string) (*storage.User, error) {
 	query := `
-		SELECT user_id, login, password, salt
+		SELECT user_id, login, password
 		FROM users
 		WHERE login = $1
 	`
@@ -85,7 +83,6 @@ func (r *UserRepository) GetByLogin(login string) (*storage.User, error) {
 		&user.UserID,
 		&user.Login,
 		&user.Password,
-		&user.Salt,
 	)
 
 	if err != nil {
@@ -102,7 +99,7 @@ func (r *UserRepository) GetByLogin(login string) (*storage.User, error) {
 func (r *UserRepository) Update(user *storage.User) error {
 	query := `
 		UPDATE users
-		SET login = $2, password = $3, salt = $4
+		SET login = $2, password = $3
 		WHERE user_id = $1
 	`
 
@@ -110,7 +107,6 @@ func (r *UserRepository) Update(user *storage.User) error {
 		user.UserID,
 		user.Login,
 		user.Password,
-		user.Salt,
 	)
 
 	if err != nil {

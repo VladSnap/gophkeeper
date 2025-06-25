@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -12,6 +14,28 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// ContextKey is the type for context keys
+type ContextKey string
+
+const (
+	// UserIDKey is the context key for user ID
+	UserIDKey ContextKey = "user_id"
+	// UsernameKey is the context key for username
+	UsernameKey ContextKey = "username"
+	// SessionIDKey is the context key for session ID
+	SessionIDKey ContextKey = "session_id"
+)
+
+// getUserIDFromContext extracts user ID from request context
+func getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
+	if userIDStr, ok := ctx.Value(UserIDKey).(string); ok {
+		return uuid.Parse(userIDStr)
+	}
+	return uuid.Nil, ErrUserNotFound
+}
+
+var ErrUserNotFound = errors.New("user not found in context")
 
 // SyncHandler handles synchronization requests
 type SyncHandler struct {
@@ -29,9 +53,7 @@ func NewSyncHandler(secretRepo repository.SecretRepositoryInterface, metadataRep
 
 // PullRequest represents a request to pull changes from server
 type PullRequest struct {
-	UserID    uuid.UUID `json:"user_id"`
-	Since     time.Time `json:"since"`
-	SessionID uuid.UUID `json:"session_id"`
+	Since time.Time `json:"since"`
 }
 
 // PullResponse represents a response with changes from server
@@ -43,10 +65,8 @@ type PullResponse struct {
 
 // PushRequest represents a request to push changes to server
 type PushRequest struct {
-	UserID    uuid.UUID           `json:"user_id"`
-	Secrets   []*storage.Secret   `json:"secrets"`
-	Metadata  []*storage.Metadata `json:"metadata"`
-	SessionID uuid.UUID           `json:"session_id"`
+	Secrets  []*storage.Secret   `json:"secrets"`
+	Metadata []*storage.Metadata `json:"metadata"`
 }
 
 // PushResponse represents a response after pushing changes
@@ -65,12 +85,20 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user ID from context (set by auth middleware)
+	userID, err := getUserIDFromContext(r.Context())
+	if err != nil {
+		log.Zap.Error("Failed to get user ID from context", zap.Error(err))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	log.Zap.Info("Pull request received",
-		zap.String("user_id", req.UserID.String()),
+		zap.String("user_id", userID.String()),
 		zap.Time("since", req.Since))
 
 	// Get changed secrets since the specified time
-	secrets, err := h.secretRepo.GetChangedSince(req.UserID, req.Since)
+	secrets, err := h.secretRepo.GetChangedSince(userID, req.Since)
 	if err != nil {
 		log.Zap.Error("Failed to get changed secrets", zap.Error(err))
 		http.Error(w, "Failed to retrieve secrets", http.StatusInternalServerError)
@@ -78,7 +106,7 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get changed metadata since the specified time
-	metadata, err := h.metadataRepo.GetChangedSince(req.UserID, req.Since)
+	metadata, err := h.metadataRepo.GetChangedSince(userID, req.Since)
 	if err != nil {
 		log.Zap.Error("Failed to get changed metadata", zap.Error(err))
 		http.Error(w, "Failed to retrieve metadata", http.StatusInternalServerError)
@@ -92,7 +120,7 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Zap.Info("Pull response prepared",
-		zap.String("user_id", req.UserID.String()),
+		zap.String("user_id", userID.String()),
 		zap.Int("secrets_count", len(secrets)),
 		zap.Int("metadata_count", len(metadata)))
 
@@ -113,8 +141,16 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user ID from context (set by auth middleware)
+	userID, err := getUserIDFromContext(r.Context())
+	if err != nil {
+		log.Zap.Error("Failed to get user ID from context", zap.Error(err))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	log.Zap.Info("Push request received",
-		zap.String("user_id", req.UserID.String()),
+		zap.String("user_id", userID.String()),
 		zap.Int("secrets_count", len(req.Secrets)),
 		zap.Int("metadata_count", len(req.Metadata)))
 
@@ -148,7 +184,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Zap.Info("Push request processed",
-		zap.String("user_id", req.UserID.String()),
+		zap.String("user_id", userID.String()),
 		zap.Bool("success", response.Success))
 
 	w.Header().Set("Content-Type", "application/json")

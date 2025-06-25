@@ -8,10 +8,11 @@ import (
 
 // User represents a user in the system
 type User struct {
-	UserID   uuid.UUID `json:"user_id" db:"user_id"`
-	Login    string    `json:"login" db:"login"`
-	Password string    `json:"password" db:"password"`
-	Salt     string    `json:"salt" db:"salt"`
+	UserID    uuid.UUID `json:"user_id" db:"user_id"`
+	Login     string    `json:"login" db:"login"`
+	Password  string    `json:"password" db:"password"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // Session represents a user session
@@ -22,6 +23,8 @@ type Session struct {
 	StartedDate  time.Time  `json:"started_date" db:"started_date"`
 	LastSyncDate *time.Time `json:"last_sync_date" db:"last_sync_date"`
 	EndDate      *time.Time `json:"end_date" db:"end_date"`
+	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+	ExpiresAt    time.Time  `json:"expires_at" db:"expires_at"`
 }
 
 // Secret represents an encrypted secret

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -61,14 +62,14 @@ func main() {
 	log.Zap.Info("Database initialized successfully")
 
 	// Initialize repositories
+	userRepo := repository.NewUserRepository(db.DB)
+	sessionRepo := repository.NewSessionRepository(db.DB)
 	secretRepo := repository.NewSecretRepository(db.DB)
 	metadataRepo := repository.NewMetadataRepository(db.DB)
 
-	// TODO: Initialize user and session repositories when needed
-	// userRepo := repository.NewUserRepository(db.DB)
-	// sessionRepo := repository.NewSessionRepository(db.DB)
-
 	// Initialize handlers
+	jwtSecret := "secret-key" // TODO: Move to config
+	authHandler := handlers.NewAuthHandler(userRepo, sessionRepo, jwtSecret)
 	syncHandler := handlers.NewSyncHandler(secretRepo, metadataRepo)
 
 	// Setup router
@@ -97,8 +98,58 @@ func main() {
 		})
 	})
 
-	// Register routes
-	syncHandler.RegisterRoutes(r)
+	// Register authentication routes (no auth required)
+	authHandler.RegisterRoutes(r)
+
+	// Create auth middleware
+	authMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Get Authorization header
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				log.Zap.Warn("No Authorization header provided")
+				http.Error(w, "Authorization header required", http.StatusUnauthorized)
+				return
+			}
+
+			// Check if the header has Bearer token
+			if !strings.HasPrefix(authHeader, "Bearer ") {
+				log.Zap.Warn("Invalid Authorization header format")
+				http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract token
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			if token == "" {
+				log.Zap.Warn("Empty token in Authorization header")
+				http.Error(w, "Empty token", http.StatusUnauthorized)
+				return
+			}
+
+			// Verify JWT token
+			claims, err := authHandler.VerifyJWT(token)
+			if err != nil {
+				log.Zap.Warn("Invalid JWT token", zap.Error(err))
+				http.Error(w, "Invalid token", http.StatusUnauthorized)
+				return
+			}
+
+			// Add user information to context using the same keys as in sync.go
+			ctx := context.WithValue(r.Context(), handlers.UserIDKey, claims.UserID)
+			ctx = context.WithValue(ctx, handlers.UsernameKey, claims.Username)
+			ctx = context.WithValue(ctx, handlers.SessionIDKey, claims.SessionID)
+
+			// Call next handler with enriched context
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+
+	// Register protected routes (requires authentication)
+	r.Group(func(r chi.Router) {
+		r.Use(authMiddleware)
+		syncHandler.RegisterRoutes(r)
+	})
 
 	log.Zap.Info("Routes registered successfully")
 
