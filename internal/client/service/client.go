@@ -26,10 +26,10 @@ func NewClientService(secretRepo repository.SecretRepositoryInterface, metadataR
 }
 
 // CreateSecret creates a new secret with associated metadata
-func (s *ClientService) CreateSecret(userID uuid.UUID, encrypted string, metadata map[string]string) (*models.Secret, error) {
+func (s *ClientService) CreateSecret(userID uuid.UUID, encrypted string,
+	metadata map[string]string) (*models.Secret, error) {
 	secret := &models.Secret{
 		SecretID:  uuid.New(),
-		UserID:    userID,
 		Encrypted: encrypted,
 	}
 
@@ -113,16 +113,6 @@ func (s *ClientService) DeleteSecret(secretID uuid.UUID) error {
 		zap.String("secret_id", secretID.String()))
 
 	return nil
-}
-
-// GetUserSecrets retrieves all secrets for a user
-func (s *ClientService) GetUserSecrets(userID uuid.UUID) ([]*models.Secret, error) {
-	secrets, err := s.secretRepo.GetByUserID(userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user secrets: %w", err)
-	}
-
-	return secrets, nil
 }
 
 // GetChangedDataSince retrieves all data changed since the specified time

@@ -137,11 +137,9 @@ func handleAuthenticatedChoice(choice string, authService *service.AuthService, 
 		return handleSync(syncService)
 	case "2": // Create secret
 		return handleCreateSecret(clientService, scanner)
-	case "3": // List secrets
-		return handleListSecrets(clientService)
-	case "4": // Logout
+	case "3": // Logout
 		return authService.Logout()
-	case "5": // Exit
+	case "4": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -234,20 +232,5 @@ func handleCreateSecret(clientService *service.ClientService, scanner *bufio.Sca
 	}
 
 	fmt.Printf("Secret created: %s\n", secret.SecretID.String())
-	return nil
-}
-
-func handleListSecrets(clientService *service.ClientService) error {
-	userID := uuid.New() // In real app, this would be from auth context
-	secrets, err := clientService.GetUserSecrets(userID)
-	if err != nil {
-		return fmt.Errorf("failed to get secrets: %w", err)
-	}
-
-	fmt.Printf("Found %d secrets:\n", len(secrets))
-	for i, secret := range secrets {
-		fmt.Printf("%d. ID: %s, Data: %s\n", i+1, secret.SecretID.String(), secret.Encrypted)
-	}
-
 	return nil
 }

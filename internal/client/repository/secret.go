@@ -31,13 +31,12 @@ func (r *SecretRepository) Create(secret *models.Secret) error {
 	secret.LastUpdatedDate = now
 
 	query := `
-		INSERT INTO secrets (secret_id, user_id, encrypted, created_date, last_updated_date)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO secrets (secret_id, encrypted, created_date, last_updated_date)
+		VALUES (?, ?, ?, ?)
 	`
 
 	_, err := r.db.Exec(query,
 		secret.SecretID.String(),
-		secret.UserID.String(),
 		secret.Encrypted,
 		secret.CreatedDate,
 		secret.LastUpdatedDate,
@@ -53,17 +52,16 @@ func (r *SecretRepository) Create(secret *models.Secret) error {
 // GetByID retrieves a secret by its ID
 func (r *SecretRepository) GetByID(secretID uuid.UUID) (*models.Secret, error) {
 	query := `
-		SELECT secret_id, user_id, encrypted, created_date, last_updated_date
+		SELECT secret_id, encrypted, created_date, last_updated_date
 		FROM secrets
 		WHERE secret_id = ?
 	`
 
 	secret := &models.Secret{}
-	var secretIDStr, userIDStr string
+	var secretIDStr string
 
 	err := r.db.QueryRow(query, secretID.String()).Scan(
 		&secretIDStr,
-		&userIDStr,
 		&secret.Encrypted,
 		&secret.CreatedDate,
 		&secret.LastUpdatedDate,
@@ -81,60 +79,7 @@ func (r *SecretRepository) GetByID(secretID uuid.UUID) (*models.Secret, error) {
 		return nil, fmt.Errorf("failed to parse secret ID: %w", err)
 	}
 
-	secret.UserID, err = uuid.Parse(userIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse user ID: %w", err)
-	}
-
 	return secret, nil
-}
-
-// GetByUserID retrieves all secrets for a specific user
-func (r *SecretRepository) GetByUserID(userID uuid.UUID) ([]*models.Secret, error) {
-	query := `
-		SELECT secret_id, user_id, encrypted, created_date, last_updated_date
-		FROM secrets
-		WHERE user_id = ?
-		ORDER BY created_date DESC
-	`
-
-	rows, err := r.db.Query(query, userID.String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get secrets: %w", err)
-	}
-	defer rows.Close()
-
-	var secrets []*models.Secret
-	for rows.Next() {
-		secret := &models.Secret{}
-		var secretIDStr, userIDStr string
-
-		err := rows.Scan(
-			&secretIDStr,
-			&userIDStr,
-			&secret.Encrypted,
-			&secret.CreatedDate,
-			&secret.LastUpdatedDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan secret: %w", err)
-		}
-
-		secret.SecretID, err = uuid.Parse(secretIDStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse secret ID: %w", err)
-		}
-
-		secret.UserID, err = uuid.Parse(userIDStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse user ID: %w", err)
-		}
-
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
 }
 
 // Update updates an existing secret
@@ -193,7 +138,7 @@ func (r *SecretRepository) Delete(secretID uuid.UUID) error {
 // GetChangedSince returns all secrets modified since the given date
 func (r *SecretRepository) GetChangedSince(since time.Time) ([]*models.Secret, error) {
 	query := `
-		SELECT secret_id, user_id, encrypted, created_date, last_updated_date
+		SELECT secret_id, encrypted, created_date, last_updated_date
 		FROM secrets
 		WHERE last_updated_date > ?
 		ORDER BY last_updated_date ASC
@@ -208,11 +153,10 @@ func (r *SecretRepository) GetChangedSince(since time.Time) ([]*models.Secret, e
 	var secrets []*models.Secret
 	for rows.Next() {
 		secret := &models.Secret{}
-		var secretIDStr, userIDStr string
+		var secretIDStr string
 
 		err := rows.Scan(
 			&secretIDStr,
-			&userIDStr,
 			&secret.Encrypted,
 			&secret.CreatedDate,
 			&secret.LastUpdatedDate,
@@ -225,11 +169,6 @@ func (r *SecretRepository) GetChangedSince(since time.Time) ([]*models.Secret, e
 		secret.SecretID, err = uuid.Parse(secretIDStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse secret ID: %w", err)
-		}
-
-		secret.UserID, err = uuid.Parse(userIDStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse user ID: %w", err)
 		}
 
 		secrets = append(secrets, secret)

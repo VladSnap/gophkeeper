@@ -9,7 +9,6 @@ import (
 // Secret represents an encrypted secret
 type Secret struct {
 	SecretID        uuid.UUID `json:"secret_id" db:"secret_id"`
-	UserID          uuid.UUID `json:"user_id" db:"user_id"`
 	Encrypted       string    `json:"encrypted" db:"encrypted"`
 	CreatedDate     time.Time `json:"created_date" db:"created_date"`
 	LastUpdatedDate time.Time `json:"last_updated_date" db:"last_updated_date"`
