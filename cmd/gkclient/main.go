@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/VladSnap/gophkeeper/internal/client/config"
+	"github.com/VladSnap/gophkeeper/internal/client/models"
 	"github.com/VladSnap/gophkeeper/internal/client/repository"
 	"github.com/VladSnap/gophkeeper/internal/client/service"
 	"github.com/VladSnap/gophkeeper/internal/client/storage"
@@ -27,26 +30,24 @@ func main() {
 	// Load configuration
 	cfg, err := config.NewConfig()
 	if err != nil {
-		log.Zap.Error("Failed to load configuration",
-			zap.Error(err))
+		log.Zap.Error("Failed to load configuration", zap.Error(err))
 		os.Exit(1)
 	}
 
 	log.Zap.Info("Configuration loaded",
 		zap.String("database_path", cfg.DatabasePath),
-		zap.String("data_dir", cfg.DataDir))
+		zap.String("data_dir", cfg.DataDir),
+		zap.String("server_url", cfg.ServerURL))
 
 	// Initialize database
 	db, err := storage.NewDatabaseClient(cfg.DatabasePath)
 	if err != nil {
-		log.Zap.Error("Failed to initialize database",
-			zap.Error(err))
+		log.Zap.Error("Failed to initialize database", zap.Error(err))
 		os.Exit(1)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			log.Zap.Error("Failed to close database",
-				zap.Error(err))
+			log.Zap.Error("Failed to close database", zap.Error(err))
 		}
 	}()
 
@@ -56,89 +57,197 @@ func main() {
 	secretRepo := repository.NewSecretRepository(db.DB)
 	metadataRepo := repository.NewMetadataRepository(db.DB)
 
-	// Initialize service
+	// Initialize services
 	clientService := service.NewClientService(secretRepo, metadataRepo)
+	authService := service.NewAuthService(cfg.ServerURL, cfg.DataDir)
+	syncService := service.NewSyncService(cfg.ServerURL, authService)
 
 	log.Zap.Info("Services initialized successfully")
 
-	// For now, just test that everything works
-	// TODO: Add CLI interface later
-	log.Zap.Info("Gophkeeper client is ready")
-
-	// Test services (just for verification)
-	if err := testServices(clientService); err != nil {
-		log.Zap.Error("Service test failed",
-			zap.Error(err))
+	// Run CLI
+	if err := runCLI(authService, syncService, clientService); err != nil {
+		log.Zap.Error("CLI error", zap.Error(err))
 		os.Exit(1)
 	}
 
 	log.Zap.Info("Application completed successfully")
 }
 
-// testServices performs basic tests to verify services work
-func testServices(clientService *service.ClientService) error {
-	log.Zap.Info("Testing services...")
+func runCLI(authService *service.AuthService, syncService *service.SyncService, clientService *service.ClientService) error {
+	scanner := bufio.NewScanner(os.Stdin)
 
-	// Test getting changed data (should be empty on first run)
-	secrets, metadata, err := clientService.GetChangedDataSince(time.Time{})
+	for {
+		if authService.IsLoggedIn() {
+			fmt.Println("\n=== Gophkeeper Client (Authenticated) ===")
+			fmt.Println("1. Sync with server")
+			fmt.Println("2. Create test secret")
+			fmt.Println("3. List secrets")
+			fmt.Println("4. Logout")
+			fmt.Println("5. Exit")
+		} else {
+			fmt.Println("\n=== Gophkeeper Client (Not Authenticated) ===")
+			fmt.Println("1. Register")
+			fmt.Println("2. Login")
+			fmt.Println("3. Exit")
+		}
+
+		fmt.Print("Choose option: ")
+		if !scanner.Scan() {
+			break
+		}
+
+		choice := strings.TrimSpace(scanner.Text())
+
+		if authService.IsLoggedIn() {
+			if err := handleAuthenticatedChoice(choice, authService, syncService, clientService, scanner); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		} else {
+			if err := handleUnauthenticatedChoice(choice, authService, scanner); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		}
+
+		if choice == "3" && !authService.IsLoggedIn() || choice == "5" && authService.IsLoggedIn() {
+			break
+		}
+	}
+
+	return nil
+}
+
+func handleUnauthenticatedChoice(choice string, authService *service.AuthService, scanner *bufio.Scanner) error {
+	switch choice {
+	case "1": // Register
+		return handleRegister(authService, scanner)
+	case "2": // Login
+		return handleLogin(authService, scanner)
+	case "3": // Exit
+		fmt.Println("Goodbye!")
+		return nil
+	default:
+		fmt.Println("Invalid option")
+		return nil
+	}
+}
+
+func handleAuthenticatedChoice(choice string, authService *service.AuthService, syncService *service.SyncService, clientService *service.ClientService, scanner *bufio.Scanner) error {
+	switch choice {
+	case "1": // Sync
+		return handleSync(syncService)
+	case "2": // Create secret
+		return handleCreateSecret(clientService, scanner)
+	case "3": // List secrets
+		return handleListSecrets(clientService)
+	case "4": // Logout
+		return authService.Logout()
+	case "5": // Exit
+		fmt.Println("Goodbye!")
+		return nil
+	default:
+		fmt.Println("Invalid option")
+		return nil
+	}
+}
+
+func handleRegister(authService *service.AuthService, scanner *bufio.Scanner) error {
+	fmt.Print("Username: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read username")
+	}
+	username := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read password")
+	}
+	password := strings.TrimSpace(scanner.Text())
+
+	if err := authService.Register(username, password); err != nil {
+		return fmt.Errorf("registration failed: %w", err)
+	}
+
+	fmt.Println("Registration successful!")
+	return nil
+}
+
+func handleLogin(authService *service.AuthService, scanner *bufio.Scanner) error {
+	fmt.Print("Username: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read username")
+	}
+	username := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read password")
+	}
+	password := strings.TrimSpace(scanner.Text())
+
+	if err := authService.Login(username, password); err != nil {
+		return fmt.Errorf("login failed: %w", err)
+	}
+
+	fmt.Println("Login successful!")
+	return nil
+}
+
+func handleSync(syncService *service.SyncService) error {
+	fmt.Println("Syncing with server...")
+
+	// Pull changes from last 24 hours for testing
+	since := time.Now().Add(-24 * time.Hour)
+	pullResp, err := syncService.Pull(since)
 	if err != nil {
-		return fmt.Errorf("failed to get changed data: %w", err)
+		return fmt.Errorf("pull failed: %w", err)
 	}
 
-	log.Zap.Info("Retrieved changed data on startup",
-		zap.Int("secrets_count", len(secrets)),
-		zap.Int("metadata_count", len(metadata)))
+	fmt.Printf("Pulled %d secrets and %d metadata entries\n", len(pullResp.Secrets), len(pullResp.Metadata))
 
-	// Test creating a sample secret
-	userID := uuid.New()
-	sampleMetadata := map[string]string{
-		"type":        "login",
-		"website":     "example.com",
-		"description": "Sample secret for testing",
-	}
-
-	secret, err := clientService.CreateSecret(userID, "encrypted_sample_data", sampleMetadata)
+	// For now, just test push with empty data
+	pushResp, err := syncService.Push([]*models.Secret{}, []*models.Metadata{})
 	if err != nil {
-		return fmt.Errorf("failed to create sample secret: %w", err)
+		return fmt.Errorf("push failed: %w", err)
 	}
 
-	log.Zap.Info("Created sample secret",
-		zap.String("secret_id", secret.SecretID.String()))
+	fmt.Printf("Push result: %s\n", pushResp.Message)
+	return nil
+}
 
-	// Test retrieving the secret
-	retrievedSecret, retrievedMetadata, err := clientService.GetSecret(secret.SecretID)
+func handleCreateSecret(clientService *service.ClientService, scanner *bufio.Scanner) error {
+	fmt.Print("Enter secret data: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read secret data")
+	}
+	secretData := strings.TrimSpace(scanner.Text())
+
+	userID := uuid.New() // In real app, this would be from auth context
+	metadata := map[string]string{
+		"type":        "test",
+		"description": "Test secret created from CLI",
+		"created_by":  "cli",
+	}
+
+	secret, err := clientService.CreateSecret(userID, secretData, metadata)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve secret: %w", err)
+		return fmt.Errorf("failed to create secret: %w", err)
 	}
 
-	log.Zap.Info("Retrieved secret successfully",
-		zap.String("secret_id", retrievedSecret.SecretID.String()),
-		zap.Int("metadata_count", len(retrievedMetadata)))
+	fmt.Printf("Secret created: %s\n", secret.SecretID.String())
+	return nil
+}
 
-	// Test updating the secret
-	if err := clientService.UpdateSecret(secret.SecretID, "updated_encrypted_data"); err != nil {
-		return fmt.Errorf("failed to update secret: %w", err)
-	}
-
-	log.Zap.Info("Updated secret successfully")
-
-	// Test getting user secrets
-	userSecrets, err := clientService.GetUserSecrets(userID)
+func handleListSecrets(clientService *service.ClientService) error {
+	userID := uuid.New() // In real app, this would be from auth context
+	secrets, err := clientService.GetUserSecrets(userID)
 	if err != nil {
-		return fmt.Errorf("failed to get user secrets: %w", err)
+		return fmt.Errorf("failed to get secrets: %w", err)
 	}
 
-	log.Zap.Info("Retrieved user secrets",
-		zap.String("user_id", userID.String()),
-		zap.Int("secrets_count", len(userSecrets)))
-
-	// Clean up - delete the test secret
-	if err := clientService.DeleteSecret(secret.SecretID); err != nil {
-		return fmt.Errorf("failed to delete test secret: %w", err)
+	fmt.Printf("Found %d secrets:\n", len(secrets))
+	for i, secret := range secrets {
+		fmt.Printf("%d. ID: %s, Data: %s\n", i+1, secret.SecretID.String(), secret.Encrypted)
 	}
 
-	log.Zap.Info("Deleted test secret successfully")
-
-	log.Zap.Info("Service tests completed successfully")
 	return nil
 }
