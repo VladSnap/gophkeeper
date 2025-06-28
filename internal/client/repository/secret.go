@@ -176,3 +176,44 @@ func (r *SecretRepository) GetChangedSince(since time.Time) ([]*models.Secret, e
 
 	return secrets, rows.Err()
 }
+
+// GetAll retrieves all secrets from the database
+func (r *SecretRepository) GetAll() ([]*models.Secret, error) {
+	query := `
+		SELECT secret_id, encrypted, created_date, last_updated_date
+		FROM secrets
+		ORDER BY created_date DESC
+	`
+
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all secrets: %w", err)
+	}
+	defer rows.Close()
+
+	var secrets []*models.Secret
+	for rows.Next() {
+		secret := &models.Secret{}
+		var secretIDStr string
+
+		err := rows.Scan(
+			&secretIDStr,
+			&secret.Encrypted,
+			&secret.CreatedDate,
+			&secret.LastUpdatedDate,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan secret: %w", err)
+		}
+
+		secret.SecretID, err = uuid.Parse(secretIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse secret ID: %w", err)
+		}
+
+		secrets = append(secrets, secret)
+	}
+
+	return secrets, rows.Err()
+}

@@ -11,6 +11,7 @@ import (
 type SecretRepositoryInterface interface {
 	Create(secret *models.Secret) error
 	GetByID(secretID uuid.UUID) (*models.Secret, error)
+	GetAll() ([]*models.Secret, error)
 	Update(secret *models.Secret) error
 	Delete(secretID uuid.UUID) error
 	GetChangedSince(since time.Time) ([]*models.Secret, error)
