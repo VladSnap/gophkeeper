@@ -16,6 +16,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // AuthHandler handles authentication requests
 type AuthHandler struct {
 	userRepo    repository.UserRepositoryInterface
@@ -105,7 +113,6 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Login:     req.Username,
 		Password:  string(hashedPassword),
 		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
 	}
 
 	if err := h.userRepo.Create(user); err != nil {
@@ -169,12 +176,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// Create session
 	session := &storage.Session{
-		SessionID:   uuid.New(),
-		UserID:      user.UserID,
-		StartedDate: time.Now(),
-		CreatedAt:   time.Now(),
-		ExpiresAt:   time.Now().Add(24 * time.Hour), // 24 hours
-		IsActive:    true,
+		SessionID: uuid.New(),
+		UserID:    user.UserID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour), // 24 hours
+		IsActive:  true,
 	}
 
 	if err := h.sessionRepo.Create(session); err != nil {
@@ -227,29 +233,64 @@ func (h *AuthHandler) generateJWT(user *storage.User, session *storage.Session) 
 
 // VerifyJWT validates a JWT token and returns claims
 func (h *AuthHandler) VerifyJWT(tokenString string) (*JWTClaims, error) {
+	log.Zap.Debug("Verifying JWT token", zap.String("token", tokenString[:min(20, len(tokenString))]))
+
 	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return h.jwtSecret, nil
 	})
 
 	if err != nil {
+		log.Zap.Error("Failed to parse JWT token", zap.Error(err))
 		return nil, err
 	}
 
 	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
+		log.Zap.Debug("JWT token parsed successfully",
+			zap.String("user_id", claims.UserID),
+			zap.String("session_id", claims.SessionID),
+			zap.Time("expires_at", claims.ExpiresAt.Time))
+
 		// Verify session is still active
 		sessionID, err := uuid.Parse(claims.SessionID)
 		if err != nil {
+			log.Zap.Error("Failed to parse session ID", zap.Error(err))
 			return nil, err
 		}
 
 		session, err := h.sessionRepo.GetByID(sessionID)
-		if err != nil || session == nil || !session.IsActive || session.ExpiresAt.Before(time.Now()) {
-			return nil, errors.New("token expired")
+		if err != nil {
+			log.Zap.Error("Failed to get session", zap.Error(err))
+			return nil, errors.New("session not found")
 		}
+
+		if session == nil {
+			log.Zap.Error("Session not found", zap.String("session_id", sessionID.String()))
+			return nil, errors.New("session not found")
+		}
+
+		if !session.IsActive {
+			log.Zap.Error("Session is not active", zap.String("session_id", sessionID.String()))
+			return nil, errors.New("session inactive")
+		}
+
+		currentTime := time.Now()
+		if session.ExpiresAt.Before(currentTime) {
+			log.Zap.Error("Session expired",
+				zap.String("session_id", sessionID.String()),
+				zap.Time("expires_at", session.ExpiresAt),
+				zap.Time("current_time", currentTime))
+			return nil, errors.New("session expired")
+		}
+
+		log.Zap.Debug("Session is valid",
+			zap.String("session_id", sessionID.String()),
+			zap.Time("expires_at", session.ExpiresAt),
+			zap.Time("current_time", currentTime))
 
 		return claims, nil
 	}
 
+	log.Zap.Error("JWT token is invalid")
 	return nil, errors.New("token invalid")
 }
 
