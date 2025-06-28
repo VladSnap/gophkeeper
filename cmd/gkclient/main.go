@@ -32,11 +32,33 @@ func main() {
 	}
 
 	log.Zap.Info("Configuration loaded",
-		zap.String("database_path", cfg.DatabasePath),
 		zap.String("data_dir", cfg.DataDir),
 		zap.String("server_url", cfg.ServerURL))
 
-	// Initialize database
+	// Create user manager
+	userManager := service.NewUserManager(cfg)
+	scanner := bufio.NewScanner(os.Stdin)
+
+	// Select or create user
+	username, isNewUser, err := userManager.SelectOrCreateUser(scanner)
+	if err != nil {
+		log.Zap.Error("Failed to select user", zap.Error(err))
+		os.Exit(1)
+	}
+
+	// Setup user environment
+	if err := userManager.SetupUserEnvironment(username); err != nil {
+		log.Zap.Error("Failed to setup user environment", zap.Error(err))
+		os.Exit(1)
+	}
+
+	log.Zap.Info("User selected",
+		zap.String("username", username),
+		zap.Bool("is_new_user", isNewUser),
+		zap.String("database_path", cfg.DatabasePath),
+		zap.String("user_data_dir", cfg.GetUserDataDir()))
+
+	// Initialize database for this user
 	db, err := storage.NewDatabaseClient(cfg.DatabasePath)
 	if err != nil {
 		log.Zap.Error("Failed to initialize database", zap.Error(err))
@@ -55,11 +77,18 @@ func main() {
 	metadataRepo := repository.NewMetadataRepository(db.DB)
 
 	// Initialize services
-	authService := service.NewAuthService(cfg.ServerURL, cfg.DataDir)
+	authService := service.NewAuthService(cfg.ServerURL)
+	authService.SetUser(username, cfg.GetUserDataDir())
 	clientService := service.NewClientService(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
 	syncService := service.NewSyncService(cfg.ServerURL, authService)
 
 	log.Zap.Info("Services initialized successfully")
+
+	// Handle user authentication
+	if err := handleUserAuthentication(authService, username, isNewUser, scanner); err != nil {
+		log.Zap.Error("Authentication failed", zap.Error(err))
+		os.Exit(1)
+	}
 
 	// Run CLI
 	if err := runCLI(authService, syncService, clientService); err != nil {
@@ -73,14 +102,9 @@ func main() {
 func runCLI(authService *service.AuthService, syncService *service.SyncService, clientService *service.ClientService) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Сначала проверяем/настраиваем мастер-пароль
-	if err := handleMasterPasswordSetup(authService, scanner); err != nil {
-		return fmt.Errorf("master password setup failed: %w", err)
-	}
-
 	for {
 		if authService.IsLoggedIn() {
-			fmt.Println("\n=== Gophkeeper Client (Authenticated) ===")
+			fmt.Printf("\n=== Gophkeeper Client - %s (Authenticated) ===\n", authService.GetCurrentUsername())
 			fmt.Println("1. Sync with server (last 24 hours)")
 			fmt.Println("2. Full sync (all data)")
 			fmt.Println("3. Create test secret")
@@ -90,10 +114,9 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			fmt.Println("7. Change master password")
 			fmt.Println("8. Exit")
 		} else {
-			fmt.Println("\n=== Gophkeeper Client (Not Authenticated) ===")
-			fmt.Println("1. Register")
-			fmt.Println("2. Login")
-			fmt.Println("3. Exit")
+			fmt.Printf("\n=== Gophkeeper Client - %s (Not Authenticated) ===\n", authService.GetCurrentUsername())
+			fmt.Println("1. Login")
+			fmt.Println("2. Exit")
 		}
 
 		fmt.Print("Choose option: ")
@@ -113,8 +136,8 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			}
 		}
 
-		// Обновленные условия выхода
-		if choice == "3" && !authService.IsLoggedIn() || choice == "8" && authService.IsLoggedIn() {
+		// Exit conditions
+		if choice == "2" && !authService.IsLoggedIn() || choice == "8" && authService.IsLoggedIn() {
 			break
 		}
 	}
@@ -124,11 +147,9 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 
 func handleUnauthenticatedChoice(choice string, authService *service.AuthService, scanner *bufio.Scanner) error {
 	switch choice {
-	case "1": // Register
-		return handleRegister(authService, scanner)
-	case "2": // Login
+	case "1": // Login
 		return handleLogin(authService, scanner)
-	case "3": // Exit
+	case "2": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -163,47 +184,36 @@ func handleAuthenticatedChoice(choice string, authService *service.AuthService, 
 }
 
 func handleRegister(authService *service.AuthService, scanner *bufio.Scanner) error {
-	fmt.Print("Username: ")
-	if !scanner.Scan() {
-		return fmt.Errorf("failed to read username")
-	}
-	username := strings.TrimSpace(scanner.Text())
-
-	fmt.Print("Password: ")
-	if !scanner.Scan() {
-		return fmt.Errorf("failed to read password")
-	}
-	password := strings.TrimSpace(scanner.Text())
-
-	if err := authService.Register(username, password); err != nil {
-		return fmt.Errorf("registration failed: %w", err)
-	}
-
-	fmt.Println("Registration successful!")
+	// This should not be used in the new multi-user system
+	// Registration is handled automatically during user creation
+	fmt.Println("Registration is handled automatically during user creation.")
+	fmt.Println("Please restart the application to create a new user.")
 	return nil
 }
 
 func handleLogin(authService *service.AuthService, scanner *bufio.Scanner) error {
 	// Проверяем и разблокируем мастер-пароль если нужно
 	if !authService.IsMasterPasswordUnlocked() {
-		if err := handleMasterPasswordSetup(authService, scanner); err != nil {
-			return fmt.Errorf("master password setup failed: %w", err)
+		fmt.Print("Enter master password: ")
+		if !scanner.Scan() {
+			return fmt.Errorf("failed to read master password")
 		}
+		masterPassword := strings.TrimSpace(scanner.Text())
+
+		if err := authService.UnlockMasterPassword(masterPassword); err != nil {
+			return fmt.Errorf("failed to unlock master password: %w", err)
+		}
+		fmt.Println("Master password unlocked!")
 	}
 
-	fmt.Print("Username: ")
-	if !scanner.Scan() {
-		return fmt.Errorf("failed to read username")
-	}
-	username := strings.TrimSpace(scanner.Text())
-
+	fmt.Printf("Logging in user: %s\n", authService.GetCurrentUsername())
 	fmt.Print("Password: ")
 	if !scanner.Scan() {
 		return fmt.Errorf("failed to read password")
 	}
 	password := strings.TrimSpace(scanner.Text())
 
-	if err := authService.Login(username, password); err != nil {
+	if err := authService.Login(authService.GetCurrentUsername(), password); err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
@@ -396,5 +406,112 @@ func handleChangeMasterPassword(authService *service.AuthService, scanner *bufio
 	}
 
 	fmt.Println("Master password changed successfully!")
+	return nil
+}
+
+// handleUserAuthentication handles authentication for new and existing users
+func handleUserAuthentication(authService *service.AuthService, username string, isNewUser bool, scanner *bufio.Scanner) error {
+	if isNewUser {
+		// For new users, first setup master password, then register + login
+		fmt.Printf("Creating new user: %s\n", username)
+
+		// Setup master password FIRST for new local user
+		fmt.Print("Enter master password for encrypting your local data: ")
+		if !scanner.Scan() {
+			return fmt.Errorf("failed to read master password")
+		}
+		masterPassword := strings.TrimSpace(scanner.Text())
+
+		if len(masterPassword) < 6 {
+			return fmt.Errorf("master password must be at least 6 characters long")
+		}
+
+		if err := authService.SetMasterPassword(masterPassword); err != nil {
+			return fmt.Errorf("failed to set master password: %w", err)
+		}
+		fmt.Println("Master password set successfully!")
+
+		// Now get server password and register + login
+		fmt.Print("Enter password for server account: ")
+		if !scanner.Scan() {
+			return fmt.Errorf("failed to read password")
+		}
+		password := strings.TrimSpace(scanner.Text())
+
+		if len(password) < 6 {
+			return fmt.Errorf("password must be at least 6 characters long")
+		}
+
+		// Try to register and login automatically
+		if err := authService.RegisterAndLogin(username, password); err != nil {
+			// If user already exists on server, try to login instead
+			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "user exists") {
+				fmt.Printf("User %s already exists on server. Attempting login...\n", username)
+				if err := authService.Login(username, password); err != nil {
+					return fmt.Errorf("failed to login existing user: %w", err)
+				}
+				fmt.Println("Login successful!")
+			} else {
+				return fmt.Errorf("failed to register and login new user: %w", err)
+			}
+		} else {
+			fmt.Println("User registered and logged in successfully!")
+		}
+	} else {
+		// For existing users, first setup master password if needed
+		fmt.Printf("Welcome back, %s!\n", username)
+
+		// Setup master password if it's not set
+		if !authService.IsMasterPasswordSet() {
+			fmt.Print("Master password not found. Enter master password for encrypting your local data: ")
+			if !scanner.Scan() {
+				return fmt.Errorf("failed to read master password")
+			}
+			masterPassword := strings.TrimSpace(scanner.Text())
+
+			if len(masterPassword) < 6 {
+				return fmt.Errorf("master password must be at least 6 characters long")
+			}
+
+			if err := authService.SetMasterPassword(masterPassword); err != nil {
+				return fmt.Errorf("failed to set master password: %w", err)
+			}
+			fmt.Println("Master password set successfully!")
+		}
+
+		// Unlock master password if it's locked
+		if !authService.IsMasterPasswordUnlocked() {
+			fmt.Print("Enter master password: ")
+			if !scanner.Scan() {
+				return fmt.Errorf("failed to read master password")
+			}
+			masterPassword := strings.TrimSpace(scanner.Text())
+
+			if err := authService.UnlockMasterPassword(masterPassword); err != nil {
+				return fmt.Errorf("failed to unlock master password: %w", err)
+			}
+			fmt.Println("Master password unlocked!")
+		}
+
+		// Try auto login with stored token
+		if err := authService.AutoLogin(); err != nil {
+			// Auto login failed, need manual server authentication
+			fmt.Println("Stored authentication not found or invalid. Please login to server.")
+			fmt.Print("Enter server password: ")
+			if !scanner.Scan() {
+				return fmt.Errorf("failed to read server password")
+			}
+			password := strings.TrimSpace(scanner.Text())
+
+			if err := authService.Login(username, password); err != nil {
+				return fmt.Errorf("login failed: %w", err)
+			}
+
+			fmt.Println("Login successful!")
+		} else {
+			fmt.Println("Successfully authenticated using stored credentials!")
+		}
+	}
+
 	return nil
 }

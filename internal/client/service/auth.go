@@ -24,6 +24,7 @@ type AuthService struct {
 	encryptKey            []byte
 	httpClient            *http.Client
 	masterPasswordManager *crypto.MasterPasswordManager
+	username              string // Current username
 }
 
 // AuthRequest represents login/register request
@@ -41,14 +42,19 @@ type AuthResponse struct {
 }
 
 // NewAuthService creates a new authentication service
-func NewAuthService(serverURL, dataDir string) *AuthService {
+func NewAuthService(serverURL string) *AuthService {
 	return &AuthService{
-		serverURL:             serverURL,
-		tokenFile:             filepath.Join(dataDir, "token.enc"),
-		encryptKey:            crypto.GenerateKey(),
-		httpClient:            &http.Client{Timeout: 30 * time.Second},
-		masterPasswordManager: crypto.NewMasterPasswordManager(dataDir),
+		serverURL:  serverURL,
+		encryptKey: crypto.GenerateKey(),
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// SetUser configures the auth service for a specific user
+func (a *AuthService) SetUser(username, userDataDir string) {
+	a.username = username
+	a.tokenFile = filepath.Join(userDataDir, "token.enc")
+	a.masterPasswordManager = crypto.NewMasterPasswordManager(userDataDir)
 }
 
 // hashPassword creates a SHA-256 hash of the password on client side
@@ -295,4 +301,53 @@ func (a *AuthService) ChangeMasterPassword(oldPassword, newPassword string) erro
 // GetMasterPasswordManager возвращает менеджер мастер-пароля
 func (a *AuthService) GetMasterPasswordManager() *crypto.MasterPasswordManager {
 	return a.masterPasswordManager
+}
+
+// RegisterAndLogin performs automatic registration and login for new user
+func (a *AuthService) RegisterAndLogin(username, password string) error {
+	// First, try to register
+	if err := a.Register(username, password); err != nil {
+		return fmt.Errorf("registration failed: %w", err)
+	}
+
+	// Then automatically login
+	if err := a.Login(username, password); err != nil {
+		return fmt.Errorf("auto-login after registration failed: %w", err)
+	}
+
+	log.Zap.Info("User registered and logged in successfully", zap.String("username", username))
+	return nil
+}
+
+// AutoLogin attempts to login using stored credentials for existing user
+func (a *AuthService) AutoLogin() error {
+	if a.username == "" {
+		return fmt.Errorf("username not set")
+	}
+
+	// Check if master password is unlocked (required to decrypt stored token)
+	if !a.masterPasswordManager.IsUnlocked() {
+		return fmt.Errorf("master password is locked - cannot access stored credentials")
+	}
+
+	// Try to load existing token
+	token, err := a.LoadToken()
+	if err != nil {
+		// Token doesn't exist or can't be loaded
+		return fmt.Errorf("stored token not found or invalid: %w", err)
+	}
+
+	if token == "" {
+		return fmt.Errorf("empty token found")
+	}
+
+	// TODO: In a real application, you would validate the token with the server here
+	// For now, we assume the token is valid if we can decrypt it
+	log.Zap.Info("Auto-login successful using stored token", zap.String("username", a.username))
+	return nil
+}
+
+// GetCurrentUsername returns the current username
+func (a *AuthService) GetCurrentUsername() string {
+	return a.username
 }
