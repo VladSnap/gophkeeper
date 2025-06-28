@@ -79,10 +79,11 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 		if authService.IsLoggedIn() {
 			fmt.Println("\n=== Gophkeeper Client (Authenticated) ===")
 			fmt.Println("1. Sync with server")
-			fmt.Println("2. Create test secret")
-			fmt.Println("3. List secrets")
-			fmt.Println("4. Logout")
-			fmt.Println("5. Exit")
+			fmt.Println("2. Full sync (push all local data)")
+			fmt.Println("3. Create test secret")
+			fmt.Println("4. List secrets")
+			fmt.Println("5. Logout")
+			fmt.Println("6. Exit")
 		} else {
 			fmt.Println("\n=== Gophkeeper Client (Not Authenticated) ===")
 			fmt.Println("1. Register")
@@ -107,7 +108,7 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			}
 		}
 
-		if choice == "3" && !authService.IsLoggedIn() || choice == "5" && authService.IsLoggedIn() {
+		if choice == "3" && !authService.IsLoggedIn() || choice == "6" && authService.IsLoggedIn() {
 			break
 		}
 	}
@@ -133,14 +134,16 @@ func handleUnauthenticatedChoice(choice string, authService *service.AuthService
 func handleAuthenticatedChoice(choice string, authService *service.AuthService, syncService *service.SyncService, clientService *service.ClientService, scanner *bufio.Scanner) error {
 	switch choice {
 	case "1": // Sync
-		return handleSync(syncService)
-	case "2": // Create secret
+		return handleSync(syncService, clientService)
+	case "2": // Full sync
+		return handleFullSync(syncService, clientService)
+	case "3": // Create secret
 		return handleCreateSecret(clientService, scanner)
-	case "3": // List secrets
+	case "4": // List secrets
 		return handleListSecrets(clientService)
-	case "4": // Logout
+	case "5": // Logout
 		return authService.Logout()
-	case "5": // Exit
+	case "6": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -191,7 +194,7 @@ func handleLogin(authService *service.AuthService, scanner *bufio.Scanner) error
 	return nil
 }
 
-func handleSync(syncService *service.SyncService) error {
+func handleSync(syncService *service.SyncService, clientService *service.ClientService) error {
 	fmt.Println("Syncing with server...")
 
 	// Pull changes from last 24 hours for testing
@@ -203,8 +206,36 @@ func handleSync(syncService *service.SyncService) error {
 
 	fmt.Printf("Pulled %d secrets and %d metadata entries\n", len(pullResp.Secrets), len(pullResp.Metadata))
 
-	// For now, just test push with empty data
-	pushResp, err := syncService.Push([]*models.Secret{}, []*models.Metadata{})
+	// Get all local secrets to push to server
+	localSecrets, err := clientService.GetAllSecrets()
+	if err != nil {
+		return fmt.Errorf("failed to get local secrets: %w", err)
+	}
+
+	// Get all local metadata
+	var allMetadata []*models.Metadata
+	for _, secret := range localSecrets {
+		metadata, err := clientService.GetMetadataBySecretID(secret.SecretID)
+		if err != nil {
+			log.Zap.Warn("Failed to get metadata for secret",
+				zap.String("secret_id", secret.SecretID.String()),
+				zap.Error(err))
+			continue
+		}
+		allMetadata = append(allMetadata, metadata...)
+	}
+
+	fmt.Printf("Pushing %d secrets and %d metadata entries to server\n", len(localSecrets), len(allMetadata))
+
+	// Convert client models to server models for transmission
+	var serverSecrets []*models.Secret
+	for _, secret := range localSecrets {
+		// Don't set UserID - it will be set on server from auth context
+		serverSecrets = append(serverSecrets, secret)
+	}
+
+	// Push local changes to server
+	pushResp, err := syncService.Push(serverSecrets, allMetadata)
 	if err != nil {
 		return fmt.Errorf("push failed: %w", err)
 	}
@@ -269,5 +300,71 @@ func handleListSecrets(clientService *service.ClientService) error {
 		fmt.Println()
 	}
 
+	return nil
+}
+
+func handleFullSync(syncService *service.SyncService, clientService *service.ClientService) error {
+	fmt.Println("Performing full synchronization...")
+
+	// Pull changes from server first
+	since := time.Now().Add(-24 * time.Hour)
+	pullResp, err := syncService.Pull(since)
+	if err != nil {
+		return fmt.Errorf("pull failed: %w", err)
+	}
+
+	fmt.Printf("Pulled %d secrets and %d metadata entries from server\n", len(pullResp.Secrets), len(pullResp.Metadata))
+
+	// Get all local secrets to push to server
+	localSecrets, err := clientService.GetAllSecrets()
+	if err != nil {
+		return fmt.Errorf("failed to get local secrets: %w", err)
+	}
+
+	// Convert client models to server models for push
+	var serverSecrets []*models.Secret
+	var allMetadata []*models.Metadata
+
+	for _, localSecret := range localSecrets {
+		// Convert to the models used for sync
+		serverSecret := &models.Secret{
+			SecretID:        localSecret.SecretID,
+			Encrypted:       localSecret.Encrypted,
+			CreatedDate:     localSecret.CreatedDate,
+			LastUpdatedDate: localSecret.LastUpdatedDate,
+		}
+		serverSecrets = append(serverSecrets, serverSecret)
+
+		// Get metadata for this secret
+		metadata, err := clientService.GetMetadataBySecretID(localSecret.SecretID)
+		if err != nil {
+			fmt.Printf("Warning: Failed to get metadata for secret %s: %v\n", localSecret.SecretID.String(), err)
+			continue
+		}
+
+		// Convert metadata to server models
+		for _, meta := range metadata {
+			serverMeta := &models.Metadata{
+				MetadataID:      meta.MetadataID,
+				SecretID:        meta.SecretID,
+				Key:             meta.Key,
+				ValueHash:       meta.ValueHash,
+				ValueEncrypted:  meta.ValueEncrypted,
+				CreatedDate:     meta.CreatedDate,
+				LastUpdatedDate: meta.LastUpdatedDate,
+			}
+			allMetadata = append(allMetadata, serverMeta)
+		}
+	}
+
+	fmt.Printf("Pushing %d secrets and %d metadata entries to server\n", len(serverSecrets), len(allMetadata))
+
+	// Push all local data to server
+	pushResp, err := syncService.Push(serverSecrets, allMetadata)
+	if err != nil {
+		return fmt.Errorf("push failed: %w", err)
+	}
+
+	fmt.Printf("Full sync completed! %s\n", pushResp.Message)
 	return nil
 }

@@ -66,8 +66,27 @@ type PullResponse struct {
 
 // PushRequest represents a request to push changes to server
 type PushRequest struct {
-	Secrets  []*storage.Secret   `json:"secrets"`
-	Metadata []*storage.Metadata `json:"metadata"`
+	Secrets  []*ClientSecret   `json:"secrets"`
+	Metadata []*ClientMetadata `json:"metadata"`
+}
+
+// ClientSecret represents a secret from client (without user_id)
+type ClientSecret struct {
+	SecretID        uuid.UUID `json:"secret_id"`
+	Encrypted       string    `json:"encrypted"`
+	CreatedDate     time.Time `json:"created_date"`
+	LastUpdatedDate time.Time `json:"last_updated_date"`
+}
+
+// ClientMetadata represents metadata from client
+type ClientMetadata struct {
+	MetadataID      uuid.UUID `json:"metadata_id"`
+	SecretID        uuid.UUID `json:"secret_id"`
+	Key             string    `json:"key"`
+	ValueHash       string    `json:"value_hash"`
+	ValueEncrypted  string    `json:"value_encrypted"`
+	CreatedDate     time.Time `json:"created_date"`
+	LastUpdatedDate time.Time `json:"last_updated_date"`
 }
 
 // PushResponse represents a response after pushing changes
@@ -158,19 +177,13 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 	// Process secrets
 	secretsProcessed := 0
 	secretsErrors := 0
-	for _, secret := range req.Secrets {
+	for _, clientSecret := range req.Secrets {
 		log.Zap.Debug("Processing secret",
-			zap.String("secret_id", secret.SecretID.String()),
-			zap.String("user_id", secret.UserID.String()))
+			zap.String("secret_id", clientSecret.SecretID.String()),
+			zap.String("user_id", userID.String()))
 
-		// Ensure the secret belongs to the authenticated user
-		if secret.UserID != userID {
-			log.Zap.Warn("Secret user ID mismatch",
-				zap.String("secret_user_id", secret.UserID.String()),
-				zap.String("authenticated_user_id", userID.String()))
-			secretsErrors++
-			continue
-		}
+		// Convert client secret to server secret with user ID
+		secret := convertClientSecretToServer(clientSecret, userID)
 
 		// Try to get existing secret
 		existingSecret, err := h.secretRepo.GetByID(secret.SecretID)
@@ -205,10 +218,13 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 	// Process metadata
 	metadataProcessed := 0
 	metadataErrors := 0
-	for _, meta := range req.Metadata {
+	for _, clientMeta := range req.Metadata {
 		log.Zap.Debug("Processing metadata",
-			zap.String("metadata_id", meta.MetadataID.String()),
-			zap.String("secret_id", meta.SecretID.String()))
+			zap.String("metadata_id", clientMeta.MetadataID.String()),
+			zap.String("secret_id", clientMeta.SecretID.String()))
+
+		// Convert client metadata to server metadata
+		meta := convertClientMetadataToServer(clientMeta)
 
 		// Verify the secret exists and belongs to the user
 		secret, err := h.secretRepo.GetByID(meta.SecretID)
@@ -307,4 +323,28 @@ func (h *SyncHandler) RegisterRoutes(r chi.Router) {
 	})
 
 	r.Get("/health", h.Health)
+}
+
+// convertClientSecretToServer converts client secret to server secret
+func convertClientSecretToServer(clientSecret *ClientSecret, userID uuid.UUID) *storage.Secret {
+	return &storage.Secret{
+		SecretID:        clientSecret.SecretID,
+		UserID:          userID,
+		Encrypted:       clientSecret.Encrypted,
+		CreatedDate:     clientSecret.CreatedDate,
+		LastUpdatedDate: clientSecret.LastUpdatedDate,
+	}
+}
+
+// convertClientMetadataToServer converts client metadata to server metadata
+func convertClientMetadataToServer(clientMeta *ClientMetadata) *storage.Metadata {
+	return &storage.Metadata{
+		MetadataID:      clientMeta.MetadataID,
+		SecretID:        clientMeta.SecretID,
+		Key:             clientMeta.Key,
+		ValueHash:       clientMeta.ValueHash,
+		ValueEncrypted:  clientMeta.ValueEncrypted,
+		CreatedDate:     clientMeta.CreatedDate,
+		LastUpdatedDate: clientMeta.LastUpdatedDate,
+	}
 }
