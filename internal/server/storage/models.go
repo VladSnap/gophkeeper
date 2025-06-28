@@ -12,7 +12,6 @@ type User struct {
 	Login     string    `json:"login" db:"login"`
 	Password  string    `json:"password" db:"password"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // Session represents a user session
@@ -20,9 +19,7 @@ type Session struct {
 	SessionID    uuid.UUID  `json:"session_id" db:"session_id"`
 	UserID       uuid.UUID  `json:"user_id" db:"user_id"`
 	IsActive     bool       `json:"is_active" db:"is_active"`
-	StartedDate  time.Time  `json:"started_date" db:"started_date"`
 	LastSyncDate *time.Time `json:"last_sync_date" db:"last_sync_date"`
-	EndDate      *time.Time `json:"end_date" db:"end_date"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	ExpiresAt    time.Time  `json:"expires_at" db:"expires_at"`
 }

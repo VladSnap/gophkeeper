@@ -26,23 +26,15 @@ func (r *SessionRepository) Create(session *storage.Session) error {
 		session.SessionID = uuid.New()
 	}
 
-	if session.StartedDate.IsZero() {
-		session.StartedDate = time.Now()
+	if session.CreatedAt.IsZero() {
+		session.CreatedAt = time.Now()
 	}
 
 	query := `
-		INSERT INTO sessions (session_id, user_id, is_active, started_date, last_sync_date, end_date)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO sessions (session_id, user_id, is_active, last_sync_date, created_at, expires_at)
+		VALUES (:session_id, :user_id, :is_active, :last_sync_date, :created_at, :expires_at)
 	`
-
-	_, err := r.db.Exec(query,
-		session.SessionID,
-		session.UserID,
-		session.IsActive,
-		session.StartedDate,
-		session.LastSyncDate,
-		session.EndDate,
-	)
+	_, err := r.db.NamedExec(query, session)
 
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
@@ -54,21 +46,13 @@ func (r *SessionRepository) Create(session *storage.Session) error {
 // GetByID retrieves a session by its ID
 func (r *SessionRepository) GetByID(sessionID uuid.UUID) (*storage.Session, error) {
 	query := `
-		SELECT session_id, user_id, is_active, started_date, last_sync_date, end_date
+		SELECT session_id, user_id, is_active, last_sync_date, created_at, expires_at
 		FROM sessions
 		WHERE session_id = $1
 	`
 
 	session := &storage.Session{}
-
-	err := r.db.QueryRow(query, sessionID).Scan(
-		&session.SessionID,
-		&session.UserID,
-		&session.IsActive,
-		&session.StartedDate,
-		&session.LastSyncDate,
-		&session.EndDate,
-	)
+	err := r.db.Get(session, query, sessionID)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -88,7 +72,6 @@ func (r *SessionRepository) GetByUserID(userID uuid.UUID) ([]*storage.Session, e
 		WHERE user_id = $1
 		ORDER BY started_date DESC
 	`
-
 	rows, err := r.db.Query(query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sessions: %w", err)

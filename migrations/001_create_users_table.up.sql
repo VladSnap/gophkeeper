@@ -2,7 +2,8 @@
 CREATE TABLE users (
     user_id UUID PRIMARY KEY,
     login VARCHAR(255) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
 -- Create index on login for faster lookups
