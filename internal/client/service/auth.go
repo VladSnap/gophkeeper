@@ -19,10 +19,11 @@ import (
 
 // AuthService handles client authentication
 type AuthService struct {
-	serverURL  string
-	tokenFile  string
-	encryptKey []byte
-	httpClient *http.Client
+	serverURL             string
+	tokenFile             string
+	encryptKey            []byte
+	httpClient            *http.Client
+	masterPasswordManager *crypto.MasterPasswordManager
 }
 
 // AuthRequest represents login/register request
@@ -42,12 +43,11 @@ type AuthResponse struct {
 // NewAuthService creates a new authentication service
 func NewAuthService(serverURL, dataDir string) *AuthService {
 	return &AuthService{
-		serverURL:  serverURL,
-		tokenFile:  filepath.Join(dataDir, "token.enc"),
-		encryptKey: crypto.GenerateKey(),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		serverURL:             serverURL,
+		tokenFile:             filepath.Join(dataDir, "token.enc"),
+		encryptKey:            crypto.GenerateKey(),
+		httpClient:            &http.Client{Timeout: 30 * time.Second},
+		masterPasswordManager: crypto.NewMasterPasswordManager(dataDir),
 	}
 }
 
@@ -149,11 +149,31 @@ func (a *AuthService) Login(username, password string) error {
 	return nil
 }
 
-// saveToken encrypts and saves the JWT token to file
+// saveToken encrypts and saves the JWT token to file using master password
 func (a *AuthService) saveToken(token string) error {
-	encryptedToken, err := crypto.Encrypt([]byte(token), a.encryptKey)
+	if !a.masterPasswordManager.IsUnlocked() {
+		return fmt.Errorf("master password is locked")
+	}
+
+	// Шифруем токен с помощью мастер-пароля
+	encryptedToken, salt, err := a.masterPasswordManager.EncryptData([]byte(token))
 	if err != nil {
 		return fmt.Errorf("failed to encrypt token: %w", err)
+	}
+
+	// Создаем структуру для хранения
+	tokenData := struct {
+		EncryptedToken string `json:"encrypted_token"`
+		Salt           string `json:"salt"`
+	}{
+		EncryptedToken: encryptedToken,
+		Salt:           salt,
+	}
+
+	// Сериализуем в JSON
+	jsonData, err := json.Marshal(tokenData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal token data: %w", err)
 	}
 
 	// Ensure directory exists
@@ -161,25 +181,41 @@ func (a *AuthService) saveToken(token string) error {
 		return fmt.Errorf("failed to create token directory: %w", err)
 	}
 
-	if err := os.WriteFile(a.tokenFile, []byte(encryptedToken), 0600); err != nil {
+	if err := os.WriteFile(a.tokenFile, jsonData, 0600); err != nil {
 		return fmt.Errorf("failed to write token file: %w", err)
 	}
 
 	return nil
 }
 
-// LoadToken loads and decrypts the JWT token from file
+// LoadToken loads and decrypts the JWT token from file using master password
 func (a *AuthService) LoadToken() (string, error) {
+	if !a.masterPasswordManager.IsUnlocked() {
+		return "", fmt.Errorf("master password is locked")
+	}
+
 	if _, err := os.Stat(a.tokenFile); os.IsNotExist(err) {
 		return "", fmt.Errorf("token file not found")
 	}
 
-	encryptedData, err := os.ReadFile(a.tokenFile)
+	// Читаем файл
+	jsonData, err := os.ReadFile(a.tokenFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to read token file: %w", err)
 	}
 
-	tokenBytes, err := crypto.Decrypt(string(encryptedData), a.encryptKey)
+	// Десериализуем JSON
+	var tokenData struct {
+		EncryptedToken string `json:"encrypted_token"`
+		Salt           string `json:"salt"`
+	}
+
+	if err := json.Unmarshal(jsonData, &tokenData); err != nil {
+		return "", fmt.Errorf("failed to unmarshal token data: %w", err)
+	}
+
+	// Расшифровываем токен
+	tokenBytes, err := a.masterPasswordManager.DecryptData(tokenData.EncryptedToken, tokenData.Salt)
 	if err != nil {
 		return "", fmt.Errorf("failed to decrypt token: %w", err)
 	}
@@ -187,8 +223,12 @@ func (a *AuthService) LoadToken() (string, error) {
 	return string(tokenBytes), nil
 }
 
-// IsLoggedIn checks if user has a valid token
+// IsLoggedIn checks if user has a valid token and master password is unlocked
 func (a *AuthService) IsLoggedIn() bool {
+	if !a.masterPasswordManager.IsUnlocked() {
+		return false
+	}
+
 	token, err := a.LoadToken()
 	if err != nil {
 		return false
@@ -220,4 +260,39 @@ func (a *AuthService) GetAuthHeader() (string, error) {
 	}
 
 	return "Bearer " + token, nil
+}
+
+// SetMasterPassword устанавливает мастер-пароль (первый раз)
+func (a *AuthService) SetMasterPassword(password string) error {
+	return a.masterPasswordManager.SetPassword(password)
+}
+
+// UnlockMasterPassword разблокирует приложение с помощью мастер-пароля
+func (a *AuthService) UnlockMasterPassword(password string) error {
+	return a.masterPasswordManager.UnlockWithPassword(password)
+}
+
+// IsMasterPasswordSet проверяет, установлен ли мастер-пароль
+func (a *AuthService) IsMasterPasswordSet() bool {
+	return a.masterPasswordManager.IsPasswordSet()
+}
+
+// IsMasterPasswordUnlocked проверяет, разблокирован ли мастер-пароль
+func (a *AuthService) IsMasterPasswordUnlocked() bool {
+	return a.masterPasswordManager.IsUnlocked()
+}
+
+// LockMasterPassword блокирует мастер-пароль
+func (a *AuthService) LockMasterPassword() {
+	a.masterPasswordManager.Lock()
+}
+
+// ChangeMasterPassword изменяет мастер-пароль
+func (a *AuthService) ChangeMasterPassword(oldPassword, newPassword string) error {
+	return a.masterPasswordManager.ChangePassword(oldPassword, newPassword)
+}
+
+// GetMasterPasswordManager возвращает менеджер мастер-пароля
+func (a *AuthService) GetMasterPasswordManager() *crypto.MasterPasswordManager {
+	return a.masterPasswordManager
 }

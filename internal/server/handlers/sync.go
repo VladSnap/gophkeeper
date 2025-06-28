@@ -199,6 +199,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 			log.Zap.Debug("Secret created", zap.String("secret_id", secret.SecretID.String()))
 		} else {
 			// Secret exists, check if update is needed
+			// Last Write Wins: сравниваем даты последнего изменения
 			if existingSecret.LastUpdatedDate.Before(secret.LastUpdatedDate) {
 				if err := h.secretRepo.Update(secret); err != nil {
 					log.Zap.Error("Failed to update secret",
@@ -207,9 +208,18 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 					secretsErrors++
 					continue
 				}
-				log.Zap.Debug("Secret updated", zap.String("secret_id", secret.SecretID.String()))
+				log.Zap.Debug("Secret updated (client version newer)",
+					zap.String("secret_id", secret.SecretID.String()),
+					zap.Time("server_date", existingSecret.LastUpdatedDate),
+					zap.Time("client_date", secret.LastUpdatedDate))
+			} else if existingSecret.LastUpdatedDate.After(secret.LastUpdatedDate) {
+				log.Zap.Debug("Secret not updated (server version newer)",
+					zap.String("secret_id", secret.SecretID.String()),
+					zap.Time("server_date", existingSecret.LastUpdatedDate),
+					zap.Time("client_date", secret.LastUpdatedDate))
 			} else {
-				log.Zap.Debug("Secret is up to date", zap.String("secret_id", secret.SecretID.String()))
+				log.Zap.Debug("Secret timestamps equal, no update needed",
+					zap.String("secret_id", secret.SecretID.String()))
 			}
 		}
 		secretsProcessed++
@@ -258,6 +268,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 			log.Zap.Debug("Metadata created", zap.String("metadata_id", meta.MetadataID.String()))
 		} else {
 			// Metadata exists, check if update is needed
+			// Last Write Wins: сравниваем даты последнего изменения
 			if existingMeta.LastUpdatedDate.Before(meta.LastUpdatedDate) {
 				if err := h.metadataRepo.Update(meta); err != nil {
 					log.Zap.Error("Failed to update metadata",
@@ -266,9 +277,18 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 					metadataErrors++
 					continue
 				}
-				log.Zap.Debug("Metadata updated", zap.String("metadata_id", meta.MetadataID.String()))
+				log.Zap.Debug("Metadata updated (client version newer)",
+					zap.String("metadata_id", meta.MetadataID.String()),
+					zap.Time("server_date", existingMeta.LastUpdatedDate),
+					zap.Time("client_date", meta.LastUpdatedDate))
+			} else if existingMeta.LastUpdatedDate.After(meta.LastUpdatedDate) {
+				log.Zap.Debug("Metadata not updated (server version newer)",
+					zap.String("metadata_id", meta.MetadataID.String()),
+					zap.Time("server_date", existingMeta.LastUpdatedDate),
+					zap.Time("client_date", meta.LastUpdatedDate))
 			} else {
-				log.Zap.Debug("Metadata is up to date", zap.String("metadata_id", meta.MetadataID.String()))
+				log.Zap.Debug("Metadata timestamps equal, no update needed",
+					zap.String("metadata_id", meta.MetadataID.String()))
 			}
 		}
 		metadataProcessed++

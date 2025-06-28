@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"runtime"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // getSystemInfo получает информацию о системе для создания уникального ключа
@@ -80,4 +82,79 @@ func Decrypt(encryptedHex string, key []byte) ([]byte, error) {
 	}
 
 	return plaintext, nil
+}
+
+// DeriveKeyFromPassword создает ключ шифрования из мастер-пароля
+func DeriveKeyFromPassword(password string, salt []byte) []byte {
+	// Используем PBKDF2 с SHA256 для создания ключа из пароля
+	return pbkdf2.Key([]byte(password), salt, 100000, 32, sha256.New)
+}
+
+// GenerateSalt создает новую соль для PBKDF2
+func GenerateSalt() ([]byte, error) {
+	salt := make([]byte, 32)
+	_, err := rand.Read(salt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+	return salt, nil
+}
+
+// EncryptWithPassword шифрует данные с использованием пароля
+func EncryptWithPassword(data []byte, password string) (encryptedData string, salt string, err error) {
+	// Генерируем соль
+	saltBytes, err := GenerateSalt()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Создаем ключ из пароля
+	key := DeriveKeyFromPassword(password, saltBytes)
+
+	// Шифруем данные
+	encrypted, err := Encrypt(data, key)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to encrypt data: %w", err)
+	}
+
+	return encrypted, hex.EncodeToString(saltBytes), nil
+}
+
+// DecryptWithPassword расшифровывает данные с использованием пароля
+func DecryptWithPassword(encryptedData string, password string, saltHex string) ([]byte, error) {
+	// Декодируем соль
+	salt, err := hex.DecodeString(saltHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode salt: %w", err)
+	}
+
+	// Создаем ключ из пароля
+	key := DeriveKeyFromPassword(password, salt)
+
+	// Расшифровываем данные
+	data, err := Decrypt(encryptedData, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt data: %w", err)
+	}
+
+	return data, nil
+}
+
+// HashValue создает SHA256 хэш от значения
+func HashValue(value string) string {
+	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])
+}
+
+// ValidatePassword проверяет правильность мастер-пароля
+func ValidatePassword(password, encryptedData, saltHex string) bool {
+	// Пытаемся расшифровать тестовые данные
+	_, err := DecryptWithPassword(encryptedData, password, saltHex)
+	return err == nil
+}
+
+// CreatePasswordVerificationData создает зашифрованные тестовые данные для проверки пароля
+func CreatePasswordVerificationData(password string) (encryptedData string, salt string, err error) {
+	testData := []byte("gophkeeper-password-test")
+	return EncryptWithPassword(testData, password)
 }

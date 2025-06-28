@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/VladSnap/gophkeeper/internal/client/config"
-	"github.com/VladSnap/gophkeeper/internal/client/models"
 	"github.com/VladSnap/gophkeeper/internal/client/repository"
 	"github.com/VladSnap/gophkeeper/internal/client/service"
 	"github.com/VladSnap/gophkeeper/internal/client/storage"
@@ -57,8 +55,8 @@ func main() {
 	metadataRepo := repository.NewMetadataRepository(db.DB)
 
 	// Initialize services
-	clientService := service.NewClientService(secretRepo, metadataRepo)
 	authService := service.NewAuthService(cfg.ServerURL, cfg.DataDir)
+	clientService := service.NewClientService(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
 	syncService := service.NewSyncService(cfg.ServerURL, authService)
 
 	log.Zap.Info("Services initialized successfully")
@@ -75,15 +73,22 @@ func main() {
 func runCLI(authService *service.AuthService, syncService *service.SyncService, clientService *service.ClientService) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
+	// Сначала проверяем/настраиваем мастер-пароль
+	if err := handleMasterPasswordSetup(authService, scanner); err != nil {
+		return fmt.Errorf("master password setup failed: %w", err)
+	}
+
 	for {
 		if authService.IsLoggedIn() {
 			fmt.Println("\n=== Gophkeeper Client (Authenticated) ===")
-			fmt.Println("1. Sync with server")
-			fmt.Println("2. Full sync (push all local data)")
+			fmt.Println("1. Sync with server (last 24 hours)")
+			fmt.Println("2. Full sync (all data)")
 			fmt.Println("3. Create test secret")
 			fmt.Println("4. List secrets")
 			fmt.Println("5. Logout")
-			fmt.Println("6. Exit")
+			fmt.Println("6. Lock master password")
+			fmt.Println("7. Change master password")
+			fmt.Println("8. Exit")
 		} else {
 			fmt.Println("\n=== Gophkeeper Client (Not Authenticated) ===")
 			fmt.Println("1. Register")
@@ -108,7 +113,8 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			}
 		}
 
-		if choice == "3" && !authService.IsLoggedIn() || choice == "6" && authService.IsLoggedIn() {
+		// Обновленные условия выхода
+		if choice == "3" && !authService.IsLoggedIn() || choice == "8" && authService.IsLoggedIn() {
 			break
 		}
 	}
@@ -143,7 +149,11 @@ func handleAuthenticatedChoice(choice string, authService *service.AuthService, 
 		return handleListSecrets(clientService)
 	case "5": // Logout
 		return authService.Logout()
-	case "6": // Exit
+	case "6": // Lock master password
+		return handleLockMasterPassword(authService)
+	case "7": // Change master password
+		return handleChangeMasterPassword(authService, scanner)
+	case "8": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -174,6 +184,13 @@ func handleRegister(authService *service.AuthService, scanner *bufio.Scanner) er
 }
 
 func handleLogin(authService *service.AuthService, scanner *bufio.Scanner) error {
+	// Проверяем и разблокируем мастер-пароль если нужно
+	if !authService.IsMasterPasswordUnlocked() {
+		if err := handleMasterPasswordSetup(authService, scanner); err != nil {
+			return fmt.Errorf("master password setup failed: %w", err)
+		}
+	}
+
 	fmt.Print("Username: ")
 	if !scanner.Scan() {
 		return fmt.Errorf("failed to read username")
@@ -197,50 +214,12 @@ func handleLogin(authService *service.AuthService, scanner *bufio.Scanner) error
 func handleSync(syncService *service.SyncService, clientService *service.ClientService) error {
 	fmt.Println("Syncing with server...")
 
-	// Pull changes from last 24 hours for testing
-	since := time.Now().Add(-24 * time.Hour)
-	pullResp, err := syncService.Pull(since)
-	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+	// Выполняем инкрементальную синхронизацию
+	if err := clientService.PerformSync(syncService, service.SyncTypeIncremental); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	fmt.Printf("Pulled %d secrets and %d metadata entries\n", len(pullResp.Secrets), len(pullResp.Metadata))
-
-	// Get all local secrets to push to server
-	localSecrets, err := clientService.GetAllSecrets()
-	if err != nil {
-		return fmt.Errorf("failed to get local secrets: %w", err)
-	}
-
-	// Get all local metadata
-	var allMetadata []*models.Metadata
-	for _, secret := range localSecrets {
-		metadata, err := clientService.GetMetadataBySecretID(secret.SecretID)
-		if err != nil {
-			log.Zap.Warn("Failed to get metadata for secret",
-				zap.String("secret_id", secret.SecretID.String()),
-				zap.Error(err))
-			continue
-		}
-		allMetadata = append(allMetadata, metadata...)
-	}
-
-	fmt.Printf("Pushing %d secrets and %d metadata entries to server\n", len(localSecrets), len(allMetadata))
-
-	// Convert client models to server models for transmission
-	var serverSecrets []*models.Secret
-	for _, secret := range localSecrets {
-		// Don't set UserID - it will be set on server from auth context
-		serverSecrets = append(serverSecrets, secret)
-	}
-
-	// Push local changes to server
-	pushResp, err := syncService.Push(serverSecrets, allMetadata)
-	if err != nil {
-		return fmt.Errorf("push failed: %w", err)
-	}
-
-	fmt.Printf("Push result: %s\n", pushResp.Message)
+	fmt.Println("Sync completed successfully!")
 	return nil
 }
 
@@ -285,6 +264,19 @@ func handleListSecrets(clientService *service.ClientService) error {
 		fmt.Printf("   Created: %s\n", secret.CreatedDate.Format("2006-01-02 15:04:05"))
 		fmt.Printf("   Last Updated: %s\n", secret.LastUpdatedDate.Format("2006-01-02 15:04:05"))
 
+		// Получаем расшифрованные данные секрета
+		decryptedData, err := clientService.DecryptSecretData(secret.Encrypted)
+		if err != nil {
+			fmt.Printf("   Data: [Error decrypting: %v]\n", err)
+		} else {
+			// Показываем только первые 50 символов для безопасности
+			if len(decryptedData) > 50 {
+				fmt.Printf("   Data: %s...\n", decryptedData[:50])
+			} else {
+				fmt.Printf("   Data: %s\n", decryptedData)
+			}
+		}
+
 		// Get metadata for this secret
 		metadata, err := clientService.GetMetadataBySecretID(secret.SecretID)
 		if err != nil {
@@ -292,7 +284,13 @@ func handleListSecrets(clientService *service.ClientService) error {
 		} else if len(metadata) > 0 {
 			fmt.Printf("   Metadata:\n")
 			for _, meta := range metadata {
-				fmt.Printf("     %s: %s\n", meta.Key, meta.ValueEncrypted)
+				// Расшифровываем значение метаданных
+				decryptedValue, err := clientService.DecryptMetadataValue(meta.ValueEncrypted)
+				if err != nil {
+					fmt.Printf("     %s: [Error decrypting: %v]\n", meta.Key, err)
+				} else {
+					fmt.Printf("     %s: %s\n", meta.Key, decryptedValue)
+				}
 			}
 		} else {
 			fmt.Printf("   Metadata: None\n")
@@ -306,65 +304,97 @@ func handleListSecrets(clientService *service.ClientService) error {
 func handleFullSync(syncService *service.SyncService, clientService *service.ClientService) error {
 	fmt.Println("Performing full synchronization...")
 
-	// Pull changes from server first
-	since := time.Now().Add(-24 * time.Hour)
-	pullResp, err := syncService.Pull(since)
-	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+	// Выполняем полную синхронизацию
+	if err := clientService.PerformSync(syncService, service.SyncTypeFull); err != nil {
+		return fmt.Errorf("full sync failed: %w", err)
 	}
 
-	fmt.Printf("Pulled %d secrets and %d metadata entries from server\n", len(pullResp.Secrets), len(pullResp.Metadata))
+	fmt.Println("Full synchronization completed successfully!")
+	return nil
+}
 
-	// Get all local secrets to push to server
-	localSecrets, err := clientService.GetAllSecrets()
-	if err != nil {
-		return fmt.Errorf("failed to get local secrets: %w", err)
-	}
-
-	// Convert client models to server models for push
-	var serverSecrets []*models.Secret
-	var allMetadata []*models.Metadata
-
-	for _, localSecret := range localSecrets {
-		// Convert to the models used for sync
-		serverSecret := &models.Secret{
-			SecretID:        localSecret.SecretID,
-			Encrypted:       localSecret.Encrypted,
-			CreatedDate:     localSecret.CreatedDate,
-			LastUpdatedDate: localSecret.LastUpdatedDate,
+// handleMasterPasswordSetup обрабатывает настройку/разблокирование мастер-пароля при запуске
+func handleMasterPasswordSetup(authService *service.AuthService, scanner *bufio.Scanner) error {
+	if !authService.IsMasterPasswordSet() {
+		fmt.Println("Master password is not set. Setting up master password...")
+		fmt.Print("Enter new master password: ")
+		if !scanner.Scan() {
+			return fmt.Errorf("failed to read master password")
 		}
-		serverSecrets = append(serverSecrets, serverSecret)
+		masterPassword := strings.TrimSpace(scanner.Text())
 
-		// Get metadata for this secret
-		metadata, err := clientService.GetMetadataBySecretID(localSecret.SecretID)
-		if err != nil {
-			fmt.Printf("Warning: Failed to get metadata for secret %s: %v\n", localSecret.SecretID.String(), err)
-			continue
+		if len(masterPassword) < 6 {
+			return fmt.Errorf("master password must be at least 6 characters long")
 		}
 
-		// Convert metadata to server models
-		for _, meta := range metadata {
-			serverMeta := &models.Metadata{
-				MetadataID:      meta.MetadataID,
-				SecretID:        meta.SecretID,
-				Key:             meta.Key,
-				ValueHash:       meta.ValueHash,
-				ValueEncrypted:  meta.ValueEncrypted,
-				CreatedDate:     meta.CreatedDate,
-				LastUpdatedDate: meta.LastUpdatedDate,
-			}
-			allMetadata = append(allMetadata, serverMeta)
+		if err := authService.SetMasterPassword(masterPassword); err != nil {
+			return fmt.Errorf("failed to set master password: %w", err)
 		}
+
+		fmt.Println("Master password set successfully!")
+	} else if !authService.IsMasterPasswordUnlocked() {
+		fmt.Println("Master password is required to access your data.")
+		fmt.Print("Enter master password: ")
+		if !scanner.Scan() {
+			return fmt.Errorf("failed to read master password")
+		}
+		masterPassword := strings.TrimSpace(scanner.Text())
+
+		if err := authService.UnlockMasterPassword(masterPassword); err != nil {
+			return fmt.Errorf("failed to unlock master password: %w", err)
+		}
+
+		fmt.Println("Master password unlocked successfully!")
 	}
 
-	fmt.Printf("Pushing %d secrets and %d metadata entries to server\n", len(serverSecrets), len(allMetadata))
+	return nil
+}
 
-	// Push all local data to server
-	pushResp, err := syncService.Push(serverSecrets, allMetadata)
-	if err != nil {
-		return fmt.Errorf("push failed: %w", err)
+// handleLockMasterPassword блокирует мастер-пароль
+func handleLockMasterPassword(authService *service.AuthService) error {
+	authService.LockMasterPassword()
+	fmt.Println("Master password locked. You will need to unlock it to access your data again.")
+
+	// После блокировки мастер-пароля пользователь автоматически разлогинивается
+	if err := authService.Logout(); err != nil {
+		log.Zap.Warn("Failed to logout after locking master password", zap.Error(err))
 	}
 
-	fmt.Printf("Full sync completed! %s\n", pushResp.Message)
+	return nil
+}
+
+// handleChangeMasterPassword изменяет мастер-пароль
+func handleChangeMasterPassword(authService *service.AuthService, scanner *bufio.Scanner) error {
+	fmt.Print("Enter current master password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read current master password")
+	}
+	oldPassword := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Enter new master password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read new master password")
+	}
+	newPassword := strings.TrimSpace(scanner.Text())
+
+	if len(newPassword) < 6 {
+		return fmt.Errorf("new master password must be at least 6 characters long")
+	}
+
+	fmt.Print("Confirm new master password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read password confirmation")
+	}
+	confirmPassword := strings.TrimSpace(scanner.Text())
+
+	if newPassword != confirmPassword {
+		return fmt.Errorf("passwords do not match")
+	}
+
+	if err := authService.ChangeMasterPassword(oldPassword, newPassword); err != nil {
+		return fmt.Errorf("failed to change master password: %w", err)
+	}
+
+	fmt.Println("Master password changed successfully!")
 	return nil
 }

@@ -1,0 +1,142 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/VladSnap/gophkeeper/internal/client/crypto"
+)
+
+func main() {
+	// Создаем временную директорию для тестирования
+	tempDir := filepath.Join(os.TempDir(), "gophkeeper-test")
+	if err := os.MkdirAll(tempDir, 0700); err != nil {
+		fmt.Printf("Failed to create temp dir: %v\n", err)
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	fmt.Println("=== Gophkeeper Master Password Test ===")
+
+	// Создаем менеджер мастер-пароля
+	masterManager := crypto.NewMasterPasswordManager(tempDir)
+
+	// Тест 1: Устанавливаем мастер-пароль
+	fmt.Println("\n1. Setting master password...")
+	password := "testmaster123"
+	if err := masterManager.SetPassword(password); err != nil {
+		fmt.Printf("Failed to set password: %v\n", err)
+		return
+	}
+	fmt.Printf("✓ Master password set successfully\n")
+
+	// Тест 2: Проверяем, что пароль установлен
+	fmt.Println("\n2. Checking if password is set...")
+	if !masterManager.IsPasswordSet() {
+		fmt.Printf("✗ Password not detected as set\n")
+		return
+	}
+	fmt.Printf("✓ Password is correctly detected as set\n")
+
+	// Тест 3: Проверяем разблокировку
+	fmt.Println("\n3. Checking unlock status...")
+	if !masterManager.IsUnlocked() {
+		fmt.Printf("✗ Manager should be unlocked after setting password\n")
+		return
+	}
+	fmt.Printf("✓ Manager is unlocked\n")
+
+	// Тест 4: Блокируем и разблокируем
+	fmt.Println("\n4. Testing lock/unlock cycle...")
+	masterManager.Lock()
+	if masterManager.IsUnlocked() {
+		fmt.Printf("✗ Manager should be locked\n")
+		return
+	}
+	fmt.Printf("✓ Manager locked successfully\n")
+
+	if err := masterManager.UnlockWithPassword(password); err != nil {
+		fmt.Printf("✗ Failed to unlock with password: %v\n", err)
+		return
+	}
+	fmt.Printf("✓ Manager unlocked successfully\n")
+
+	// Тест 5: Шифрование и расшифровка данных
+	fmt.Println("\n5. Testing data encryption/decryption...")
+	testData := "This is secret data that needs to be encrypted!"
+
+	encryptedData, salt, err := masterManager.EncryptData([]byte(testData))
+	if err != nil {
+		fmt.Printf("✗ Failed to encrypt data: %v\n", err)
+		return
+	}
+	fmt.Printf("✓ Data encrypted successfully\n")
+	fmt.Printf("  Encrypted: %s...\n", encryptedData[:32])
+	fmt.Printf("  Salt: %s...\n", salt[:32])
+
+	decryptedData, err := masterManager.DecryptData(encryptedData, salt)
+	if err != nil {
+		fmt.Printf("✗ Failed to decrypt data: %v\n", err)
+		return
+	}
+
+	if string(decryptedData) != testData {
+		fmt.Printf("✗ Decrypted data doesn't match original\n")
+		fmt.Printf("  Original: %s\n", testData)
+		fmt.Printf("  Decrypted: %s\n", string(decryptedData))
+		return
+	}
+	fmt.Printf("✓ Data decrypted successfully and matches original\n")
+
+	// Тест 6: Тестирование хэширования
+	fmt.Println("\n6. Testing SHA256 hashing...")
+	testValue := "metadata value to hash"
+	hash := crypto.HashValue(testValue)
+	if len(hash) != 64 { // SHA256 hex string length
+		fmt.Printf("✗ Hash has wrong length: %d (expected 64)\n", len(hash))
+		return
+	}
+	fmt.Printf("✓ Hash generated successfully: %s\n", hash)
+
+	// Тест 7: Проверка неправильного пароля
+	fmt.Println("\n7. Testing wrong password...")
+	masterManager.Lock()
+	if err := masterManager.UnlockWithPassword("wrongpassword"); err == nil {
+		fmt.Printf("✗ Should fail with wrong password\n")
+		return
+	}
+	fmt.Printf("✓ Correctly rejected wrong password\n")
+
+	// Тест 8: Смена пароля
+	fmt.Println("\n8. Testing password change...")
+	if err := masterManager.UnlockWithPassword(password); err != nil {
+		fmt.Printf("✗ Failed to unlock with original password: %v\n", err)
+		return
+	}
+
+	newPassword := "newmaster456"
+	if err := masterManager.ChangePassword(password, newPassword); err != nil {
+		fmt.Printf("✗ Failed to change password: %v\n", err)
+		return
+	}
+	fmt.Printf("✓ Password changed successfully\n")
+
+	// Проверяем, что старый пароль больше не работает
+	masterManager.Lock()
+	if err := masterManager.UnlockWithPassword(password); err == nil {
+		fmt.Printf("✗ Old password should not work\n")
+		return
+	}
+	fmt.Printf("✓ Old password correctly rejected\n")
+
+	// Проверяем, что новый пароль работает
+	if err := masterManager.UnlockWithPassword(newPassword); err != nil {
+		fmt.Printf("✗ New password should work: %v\n", err)
+		return
+	}
+	fmt.Printf("✓ New password works correctly\n")
+
+	fmt.Println("\n=== All tests passed! ===")
+	fmt.Println("Master password implementation is working correctly.")
+}
