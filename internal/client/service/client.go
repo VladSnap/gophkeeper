@@ -26,7 +26,7 @@ func NewClientService(secretRepo repository.SecretRepositoryInterface, metadataR
 }
 
 // CreateSecret creates a new secret with associated metadata
-func (s *ClientService) CreateSecret(userID uuid.UUID, encrypted string,
+func (s *ClientService) CreateSecret(encrypted string,
 	metadata map[string]string) (*models.Secret, error) {
 	secret := &models.Secret{
 		SecretID:  uuid.New(),
@@ -39,8 +39,7 @@ func (s *ClientService) CreateSecret(userID uuid.UUID, encrypted string,
 	}
 
 	log.Zap.Info("Secret created",
-		zap.String("secret_id", secret.SecretID.String()),
-		zap.String("user_id", userID.String()))
+		zap.String("secret_id", secret.SecretID.String()))
 
 	// Create metadata entries
 	for key, value := range metadata {

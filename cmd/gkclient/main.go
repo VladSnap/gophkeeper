@@ -13,7 +13,6 @@ import (
 	"github.com/VladSnap/gophkeeper/internal/client/service"
 	"github.com/VladSnap/gophkeeper/internal/client/storage"
 	"github.com/VladSnap/gophkeeper/pkg/log"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -219,14 +218,13 @@ func handleCreateSecret(clientService *service.ClientService, scanner *bufio.Sca
 	}
 	secretData := strings.TrimSpace(scanner.Text())
 
-	userID := uuid.New() // In real app, this would be from auth context
 	metadata := map[string]string{
 		"type":        "test",
 		"description": "Test secret created from CLI",
 		"created_by":  "cli",
 	}
 
-	secret, err := clientService.CreateSecret(userID, secretData, metadata)
+	secret, err := clientService.CreateSecret(secretData, metadata)
 	if err != nil {
 		return fmt.Errorf("failed to create secret: %w", err)
 	}
