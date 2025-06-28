@@ -113,6 +113,11 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			fmt.Println("6. Lock master password")
 			fmt.Println("7. Change master password")
 			fmt.Println("8. Exit")
+		} else if !authService.IsMasterPasswordUnlocked() && authService.IsMasterPasswordSet() {
+			// Master password is locked but user might have stored authentication
+			fmt.Printf("\n=== Gophkeeper Client - %s (Master Password Locked) ===\n", authService.GetCurrentUsername())
+			fmt.Println("1. Unlock master password")
+			fmt.Println("2. Exit")
 		} else {
 			fmt.Printf("\n=== Gophkeeper Client - %s (Not Authenticated) ===\n", authService.GetCurrentUsername())
 			fmt.Println("1. Login")
@@ -130,6 +135,10 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 			if err := handleAuthenticatedChoice(choice, authService, syncService, clientService, scanner); err != nil {
 				fmt.Printf("Error: %v\n", err)
 			}
+		} else if !authService.IsMasterPasswordUnlocked() && authService.IsMasterPasswordSet() {
+			if err := handleLockedMasterPasswordChoice(choice, authService, scanner); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
 		} else {
 			if err := handleUnauthenticatedChoice(choice, authService, scanner); err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -137,7 +146,7 @@ func runCLI(authService *service.AuthService, syncService *service.SyncService, 
 		}
 
 		// Exit conditions
-		if choice == "2" && !authService.IsLoggedIn() || choice == "8" && authService.IsLoggedIn() {
+		if choice == "2" && (!authService.IsLoggedIn() || (!authService.IsMasterPasswordUnlocked() && authService.IsMasterPasswordSet())) || choice == "8" && authService.IsLoggedIn() {
 			break
 		}
 	}
@@ -364,12 +373,9 @@ func handleMasterPasswordSetup(authService *service.AuthService, scanner *bufio.
 func handleLockMasterPassword(authService *service.AuthService) error {
 	authService.LockMasterPassword()
 	fmt.Println("Master password locked. You will need to unlock it to access your data again.")
+	fmt.Println("Your server authentication is preserved and no re-login is required.")
 
-	// После блокировки мастер-пароля пользователь автоматически разлогинивается
-	if err := authService.Logout(); err != nil {
-		log.Zap.Warn("Failed to logout after locking master password", zap.Error(err))
-	}
-
+	// НЕ удаляем токен - авторизация остается, только блокируем локальный доступ
 	return nil
 }
 
@@ -514,4 +520,44 @@ func handleUserAuthentication(authService *service.AuthService, username string,
 	}
 
 	return nil
+}
+
+// handleUnlockMasterPassword разблокирует мастер-пароль без повторной авторизации
+func handleUnlockMasterPassword(authService *service.AuthService, scanner *bufio.Scanner) error {
+	if authService.IsMasterPasswordUnlocked() {
+		fmt.Println("Master password is already unlocked.")
+		return nil
+	}
+
+	fmt.Print("Enter master password: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("failed to read master password")
+	}
+	masterPassword := strings.TrimSpace(scanner.Text())
+
+	if err := authService.UnlockMasterPassword(masterPassword); err != nil {
+		return fmt.Errorf("failed to unlock master password: %w", err)
+	}
+
+	fmt.Println("Master password unlocked successfully!")
+
+	// Проверяем, есть ли сохраненный токен для автоматической авторизации
+	if authService.IsLoggedIn() {
+		fmt.Println("Authentication restored using stored credentials.")
+	}
+
+	return nil
+}
+
+func handleLockedMasterPasswordChoice(choice string, authService *service.AuthService, scanner *bufio.Scanner) error {
+	switch choice {
+	case "1": // Unlock master password
+		return handleUnlockMasterPassword(authService, scanner)
+	case "2": // Exit
+		fmt.Println("Goodbye!")
+		return nil
+	default:
+		fmt.Println("Invalid option")
+		return nil
+	}
 }

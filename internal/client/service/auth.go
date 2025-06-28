@@ -320,6 +320,7 @@ func (a *AuthService) RegisterAndLogin(username, password string) error {
 }
 
 // AutoLogin attempts to login using stored credentials for existing user
+// This method does NOT make any server requests - it only checks local stored token
 func (a *AuthService) AutoLogin() error {
 	if a.username == "" {
 		return fmt.Errorf("username not set")
@@ -341,8 +342,8 @@ func (a *AuthService) AutoLogin() error {
 		return fmt.Errorf("empty token found")
 	}
 
-	// TODO: In a real application, you would validate the token with the server here
-	// For now, we assume the token is valid if we can decrypt it
+	// We assume the token is valid if we can decrypt it locally
+	// No server validation is performed here to avoid unnecessary network requests
 	log.Zap.Info("Auto-login successful using stored token", zap.String("username", a.username))
 	return nil
 }
