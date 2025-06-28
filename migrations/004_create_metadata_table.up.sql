@@ -3,7 +3,7 @@ CREATE TABLE metadata (
     metadata_id UUID PRIMARY KEY,
     secret_id UUID NOT NULL,
     key VARCHAR(255) NOT NULL,
-    value_hash VARCHAR(32) NOT NULL,
+    value_hash VARCHAR(64) NOT NULL,
     value_encrypted TEXT NOT NULL,
     created_date TIMESTAMP WITH TIME ZONE NOT NULL,
     last_updated_date TIMESTAMP WITH TIME ZONE NOT NULL,
