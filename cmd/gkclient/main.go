@@ -136,9 +136,11 @@ func handleAuthenticatedChoice(choice string, authService *service.AuthService, 
 		return handleSync(syncService)
 	case "2": // Create secret
 		return handleCreateSecret(clientService, scanner)
-	case "3": // Logout
+	case "3": // List secrets
+		return handleListSecrets(clientService)
+	case "4": // Logout
 		return authService.Logout()
-	case "4": // Exit
+	case "5": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -230,5 +232,42 @@ func handleCreateSecret(clientService *service.ClientService, scanner *bufio.Sca
 	}
 
 	fmt.Printf("Secret created: %s\n", secret.SecretID.String())
+	return nil
+}
+
+func handleListSecrets(clientService *service.ClientService) error {
+	fmt.Println("Listing all secrets...")
+
+	secrets, err := clientService.GetAllSecrets()
+	if err != nil {
+		return fmt.Errorf("failed to get secrets: %w", err)
+	}
+
+	if len(secrets) == 0 {
+		fmt.Println("No secrets found.")
+		return nil
+	}
+
+	fmt.Printf("Found %d secret(s):\n\n", len(secrets))
+	for i, secret := range secrets {
+		fmt.Printf("%d. Secret ID: %s\n", i+1, secret.SecretID.String())
+		fmt.Printf("   Created: %s\n", secret.CreatedDate.Format("2006-01-02 15:04:05"))
+		fmt.Printf("   Last Updated: %s\n", secret.LastUpdatedDate.Format("2006-01-02 15:04:05"))
+
+		// Get metadata for this secret
+		metadata, err := clientService.GetMetadataBySecretID(secret.SecretID)
+		if err != nil {
+			fmt.Printf("   Metadata: Error retrieving (%v)\n", err)
+		} else if len(metadata) > 0 {
+			fmt.Printf("   Metadata:\n")
+			for _, meta := range metadata {
+				fmt.Printf("     %s: %s\n", meta.Key, meta.ValueEncrypted)
+			}
+		} else {
+			fmt.Printf("   Metadata: None\n")
+		}
+		fmt.Println()
+	}
+
 	return nil
 }

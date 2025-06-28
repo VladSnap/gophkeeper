@@ -195,6 +195,29 @@ func (s *ClientService) DeleteMetadata(metadataID uuid.UUID) error {
 	return nil
 }
 
+// GetAllSecrets retrieves all secrets from the local database
+func (s *ClientService) GetAllSecrets() ([]*models.Secret, error) {
+	secrets, err := s.secretRepo.GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all secrets: %w", err)
+	}
+
+	log.Zap.Info("Retrieved all secrets",
+		zap.Int("secrets_count", len(secrets)))
+
+	return secrets, nil
+}
+
+// GetMetadataBySecretID retrieves all metadata for a specific secret
+func (s *ClientService) GetMetadataBySecretID(secretID uuid.UUID) ([]*models.Metadata, error) {
+	metadata, err := s.metadataRepo.GetBySecretID(secretID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata for secret: %w", err)
+	}
+
+	return metadata, nil
+}
+
 // TODO: Implement these utility functions
 func generateHash(value string) string {
 	// Placeholder - implement proper hashing

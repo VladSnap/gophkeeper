@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -154,32 +155,123 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 		zap.Int("secrets_count", len(req.Secrets)),
 		zap.Int("metadata_count", len(req.Metadata)))
 
-	// For now, we'll just simulate processing without actually saving
-	// TODO: Implement actual synchronization logic later
-
-	// Process secrets (placeholder)
+	// Process secrets
+	secretsProcessed := 0
+	secretsErrors := 0
 	for _, secret := range req.Secrets {
 		log.Zap.Debug("Processing secret",
 			zap.String("secret_id", secret.SecretID.String()),
 			zap.String("user_id", secret.UserID.String()))
 
-		// TODO: Add conflict resolution logic
-		// TODO: Save or update secret in database
+		// Ensure the secret belongs to the authenticated user
+		if secret.UserID != userID {
+			log.Zap.Warn("Secret user ID mismatch",
+				zap.String("secret_user_id", secret.UserID.String()),
+				zap.String("authenticated_user_id", userID.String()))
+			secretsErrors++
+			continue
+		}
+
+		// Try to get existing secret
+		existingSecret, err := h.secretRepo.GetByID(secret.SecretID)
+		if err != nil {
+			// Secret doesn't exist, create it
+			if err := h.secretRepo.Create(secret); err != nil {
+				log.Zap.Error("Failed to create secret",
+					zap.String("secret_id", secret.SecretID.String()),
+					zap.Error(err))
+				secretsErrors++
+				continue
+			}
+			log.Zap.Debug("Secret created", zap.String("secret_id", secret.SecretID.String()))
+		} else {
+			// Secret exists, check if update is needed
+			if existingSecret.LastUpdatedDate.Before(secret.LastUpdatedDate) {
+				if err := h.secretRepo.Update(secret); err != nil {
+					log.Zap.Error("Failed to update secret",
+						zap.String("secret_id", secret.SecretID.String()),
+						zap.Error(err))
+					secretsErrors++
+					continue
+				}
+				log.Zap.Debug("Secret updated", zap.String("secret_id", secret.SecretID.String()))
+			} else {
+				log.Zap.Debug("Secret is up to date", zap.String("secret_id", secret.SecretID.String()))
+			}
+		}
+		secretsProcessed++
 	}
 
-	// Process metadata (placeholder)
+	// Process metadata
+	metadataProcessed := 0
+	metadataErrors := 0
 	for _, meta := range req.Metadata {
 		log.Zap.Debug("Processing metadata",
 			zap.String("metadata_id", meta.MetadataID.String()),
 			zap.String("secret_id", meta.SecretID.String()))
 
-		// TODO: Add conflict resolution logic
-		// TODO: Save or update metadata in database
+		// Verify the secret exists and belongs to the user
+		secret, err := h.secretRepo.GetByID(meta.SecretID)
+		if err != nil {
+			log.Zap.Warn("Metadata references non-existent secret",
+				zap.String("metadata_id", meta.MetadataID.String()),
+				zap.String("secret_id", meta.SecretID.String()))
+			metadataErrors++
+			continue
+		}
+
+		if secret.UserID != userID {
+			log.Zap.Warn("Metadata secret user ID mismatch",
+				zap.String("secret_user_id", secret.UserID.String()),
+				zap.String("authenticated_user_id", userID.String()))
+			metadataErrors++
+			continue
+		}
+
+		// Try to get existing metadata
+		existingMeta, err := h.metadataRepo.GetByID(meta.MetadataID)
+		if err != nil {
+			// Metadata doesn't exist, create it
+			if err := h.metadataRepo.Create(meta); err != nil {
+				log.Zap.Error("Failed to create metadata",
+					zap.String("metadata_id", meta.MetadataID.String()),
+					zap.Error(err))
+				metadataErrors++
+				continue
+			}
+			log.Zap.Debug("Metadata created", zap.String("metadata_id", meta.MetadataID.String()))
+		} else {
+			// Metadata exists, check if update is needed
+			if existingMeta.LastUpdatedDate.Before(meta.LastUpdatedDate) {
+				if err := h.metadataRepo.Update(meta); err != nil {
+					log.Zap.Error("Failed to update metadata",
+						zap.String("metadata_id", meta.MetadataID.String()),
+						zap.Error(err))
+					metadataErrors++
+					continue
+				}
+				log.Zap.Debug("Metadata updated", zap.String("metadata_id", meta.MetadataID.String()))
+			} else {
+				log.Zap.Debug("Metadata is up to date", zap.String("metadata_id", meta.MetadataID.String()))
+			}
+		}
+		metadataProcessed++
+	}
+
+	var message string
+	success := secretsErrors == 0 && metadataErrors == 0
+
+	if success {
+		message = fmt.Sprintf("All changes processed successfully. Secrets: %d processed, Metadata: %d processed",
+			secretsProcessed, metadataProcessed)
+	} else {
+		message = fmt.Sprintf("Processed with errors. Secrets: %d processed, %d errors. Metadata: %d processed, %d errors",
+			secretsProcessed, secretsErrors, metadataProcessed, metadataErrors)
 	}
 
 	response := PushResponse{
-		Success:   true,
-		Message:   "Changes processed successfully",
+		Success:   success,
+		Message:   message,
 		Timestamp: time.Now(),
 	}
 
