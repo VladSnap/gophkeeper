@@ -32,19 +32,10 @@ func (r *MetadataRepository) Create(metadata *storage.Metadata) error {
 
 	query := `
 		INSERT INTO metadata (metadata_id, secret_id, key, value_hash, value_encrypted, created_date, last_updated_date)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES (:metadata_id, :secret_id, :key, :value_hash, :value_encrypted, :created_date, :last_updated_date)
 	`
 
-	_, err := r.db.Exec(query,
-		metadata.MetadataID,
-		metadata.SecretID,
-		metadata.Key,
-		metadata.ValueHash,
-		metadata.ValueEncrypted,
-		metadata.CreatedDate,
-		metadata.LastUpdatedDate,
-	)
-
+	_, err := r.db.NamedExec(query, metadata)
 	if err != nil {
 		return fmt.Errorf("failed to create metadata: %w", err)
 	}
@@ -61,16 +52,7 @@ func (r *MetadataRepository) GetByID(metadataID uuid.UUID) (*storage.Metadata, e
 	`
 
 	metadata := &storage.Metadata{}
-
-	err := r.db.QueryRow(query, metadataID).Scan(
-		&metadata.MetadataID,
-		&metadata.SecretID,
-		&metadata.Key,
-		&metadata.ValueHash,
-		&metadata.ValueEncrypted,
-		&metadata.CreatedDate,
-		&metadata.LastUpdatedDate,
-	)
+	err := r.db.Get(metadata, query, metadataID)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -91,34 +73,13 @@ func (r *MetadataRepository) GetBySecretID(secretID uuid.UUID) ([]*storage.Metad
 		ORDER BY created_date DESC
 	`
 
-	rows, err := r.db.Query(query, secretID)
+	var metadataList []*storage.Metadata
+	err := r.db.Select(&metadataList, query, secretID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata: %w", err)
 	}
-	defer rows.Close()
 
-	var metadataList []*storage.Metadata
-	for rows.Next() {
-		metadata := &storage.Metadata{}
-
-		err := rows.Scan(
-			&metadata.MetadataID,
-			&metadata.SecretID,
-			&metadata.Key,
-			&metadata.ValueHash,
-			&metadata.ValueEncrypted,
-			&metadata.CreatedDate,
-			&metadata.LastUpdatedDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan metadata: %w", err)
-		}
-
-		metadataList = append(metadataList, metadata)
-	}
-
-	return metadataList, rows.Err()
+	return metadataList, nil
 }
 
 // Update updates an existing metadata entry
@@ -127,18 +88,11 @@ func (r *MetadataRepository) Update(metadata *storage.Metadata) error {
 
 	query := `
 		UPDATE metadata
-		SET key = $2, value_hash = $3, value_encrypted = $4, last_updated_date = $5
-		WHERE metadata_id = $1
+		SET key = :key, value_hash = :value_hash, value_encrypted = :value_encrypted, last_updated_date = :last_updated_date
+		WHERE metadata_id = :metadata_id
 	`
 
-	result, err := r.db.Exec(query,
-		metadata.MetadataID,
-		metadata.Key,
-		metadata.ValueHash,
-		metadata.ValueEncrypted,
-		metadata.LastUpdatedDate,
-	)
-
+	result, err := r.db.NamedExec(query, metadata)
 	if err != nil {
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
@@ -157,9 +111,13 @@ func (r *MetadataRepository) Update(metadata *storage.Metadata) error {
 
 // Delete removes metadata from the database
 func (r *MetadataRepository) Delete(metadataID uuid.UUID) error {
-	query := `DELETE FROM metadata WHERE metadata_id = $1`
+	query := `DELETE FROM metadata WHERE metadata_id = :metadata_id`
 
-	result, err := r.db.Exec(query, metadataID)
+	params := map[string]interface{}{
+		"metadata_id": metadataID,
+	}
+
+	result, err := r.db.NamedExec(query, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete metadata: %w", err)
 	}
@@ -178,9 +136,13 @@ func (r *MetadataRepository) Delete(metadataID uuid.UUID) error {
 
 // DeleteBySecretID removes all metadata for a specific secret
 func (r *MetadataRepository) DeleteBySecretID(secretID uuid.UUID) error {
-	query := `DELETE FROM metadata WHERE secret_id = $1`
+	query := `DELETE FROM metadata WHERE secret_id = :secret_id`
 
-	_, err := r.db.Exec(query, secretID)
+	params := map[string]interface{}{
+		"secret_id": secretID,
+	}
+
+	_, err := r.db.NamedExec(query, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete metadata for secret: %w", err)
 	}
@@ -198,32 +160,11 @@ func (r *MetadataRepository) GetChangedSince(userID uuid.UUID, since time.Time) 
 		ORDER BY m.last_updated_date ASC
 	`
 
-	rows, err := r.db.Query(query, userID, since)
+	var metadataList []*storage.Metadata
+	err := r.db.Select(&metadataList, query, userID, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get changed metadata: %w", err)
 	}
-	defer rows.Close()
 
-	var metadataList []*storage.Metadata
-	for rows.Next() {
-		metadata := &storage.Metadata{}
-
-		err := rows.Scan(
-			&metadata.MetadataID,
-			&metadata.SecretID,
-			&metadata.Key,
-			&metadata.ValueHash,
-			&metadata.ValueEncrypted,
-			&metadata.CreatedDate,
-			&metadata.LastUpdatedDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan metadata: %w", err)
-		}
-
-		metadataList = append(metadataList, metadata)
-	}
-
-	return metadataList, rows.Err()
+	return metadataList, nil
 }

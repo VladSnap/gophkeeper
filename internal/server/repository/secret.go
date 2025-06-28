@@ -32,17 +32,10 @@ func (r *SecretRepository) Create(secret *storage.Secret) error {
 
 	query := `
 		INSERT INTO secrets (secret_id, user_id, encrypted, created_date, last_updated_date)
-		VALUES ($1, $2, $3, $4, $5)
+		VALUES (:secret_id, :user_id, :encrypted, :created_date, :last_updated_date)
 	`
 
-	_, err := r.db.Exec(query,
-		secret.SecretID,
-		secret.UserID,
-		secret.Encrypted,
-		secret.CreatedDate,
-		secret.LastUpdatedDate,
-	)
-
+	_, err := r.db.NamedExec(query, secret)
 	if err != nil {
 		return fmt.Errorf("failed to create secret: %w", err)
 	}
@@ -59,14 +52,7 @@ func (r *SecretRepository) GetByID(secretID uuid.UUID) (*storage.Secret, error) 
 	`
 
 	secret := &storage.Secret{}
-
-	err := r.db.QueryRow(query, secretID).Scan(
-		&secret.SecretID,
-		&secret.UserID,
-		&secret.Encrypted,
-		&secret.CreatedDate,
-		&secret.LastUpdatedDate,
-	)
+	err := r.db.Get(secret, query, secretID)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -87,32 +73,13 @@ func (r *SecretRepository) GetByUserID(userID uuid.UUID) ([]*storage.Secret, err
 		ORDER BY created_date DESC
 	`
 
-	rows, err := r.db.Query(query, userID)
+	var secrets []*storage.Secret
+	err := r.db.Select(&secrets, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get secrets: %w", err)
 	}
-	defer rows.Close()
 
-	var secrets []*storage.Secret
-	for rows.Next() {
-		secret := &storage.Secret{}
-
-		err := rows.Scan(
-			&secret.SecretID,
-			&secret.UserID,
-			&secret.Encrypted,
-			&secret.CreatedDate,
-			&secret.LastUpdatedDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan secret: %w", err)
-		}
-
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+	return secrets, nil
 }
 
 // Update updates an existing secret
@@ -121,16 +88,11 @@ func (r *SecretRepository) Update(secret *storage.Secret) error {
 
 	query := `
 		UPDATE secrets
-		SET encrypted = $2, last_updated_date = $3
-		WHERE secret_id = $1
+		SET encrypted = :encrypted, last_updated_date = :last_updated_date
+		WHERE secret_id = :secret_id
 	`
 
-	result, err := r.db.Exec(query,
-		secret.SecretID,
-		secret.Encrypted,
-		secret.LastUpdatedDate,
-	)
-
+	result, err := r.db.NamedExec(query, secret)
 	if err != nil {
 		return fmt.Errorf("failed to update secret: %w", err)
 	}
@@ -149,9 +111,13 @@ func (r *SecretRepository) Update(secret *storage.Secret) error {
 
 // Delete removes a secret from the database
 func (r *SecretRepository) Delete(secretID uuid.UUID) error {
-	query := `DELETE FROM secrets WHERE secret_id = $1`
+	query := `DELETE FROM secrets WHERE secret_id = :secret_id`
 
-	result, err := r.db.Exec(query, secretID)
+	params := map[string]interface{}{
+		"secret_id": secretID,
+	}
+
+	result, err := r.db.NamedExec(query, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete secret: %w", err)
 	}
@@ -177,30 +143,11 @@ func (r *SecretRepository) GetChangedSince(userID uuid.UUID, since time.Time) ([
 		ORDER BY last_updated_date ASC
 	`
 
-	rows, err := r.db.Query(query, userID, since)
+	var secrets []*storage.Secret
+	err := r.db.Select(&secrets, query, userID, since)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get changed secrets: %w", err)
 	}
-	defer rows.Close()
 
-	var secrets []*storage.Secret
-	for rows.Next() {
-		secret := &storage.Secret{}
-
-		err := rows.Scan(
-			&secret.SecretID,
-			&secret.UserID,
-			&secret.Encrypted,
-			&secret.CreatedDate,
-			&secret.LastUpdatedDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan secret: %w", err)
-		}
-
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+	return secrets, nil
 }

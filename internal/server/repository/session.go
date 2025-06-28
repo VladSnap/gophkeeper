@@ -67,93 +67,48 @@ func (r *SessionRepository) GetByID(sessionID uuid.UUID) (*storage.Session, erro
 // GetByUserID retrieves all sessions for a specific user
 func (r *SessionRepository) GetByUserID(userID uuid.UUID) ([]*storage.Session, error) {
 	query := `
-		SELECT session_id, user_id, is_active, started_date, last_sync_date, end_date
+		SELECT session_id, user_id, is_active, last_sync_date, created_at, expires_at
 		FROM sessions
 		WHERE user_id = $1
-		ORDER BY started_date DESC
+		ORDER BY created_at DESC
 	`
-	rows, err := r.db.Query(query, userID)
+
+	var sessions []*storage.Session
+	err := r.db.Select(&sessions, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sessions: %w", err)
 	}
-	defer rows.Close()
 
-	var sessions []*storage.Session
-	for rows.Next() {
-		session := &storage.Session{}
-
-		err := rows.Scan(
-			&session.SessionID,
-			&session.UserID,
-			&session.IsActive,
-			&session.StartedDate,
-			&session.LastSyncDate,
-			&session.EndDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan session: %w", err)
-		}
-
-		sessions = append(sessions, session)
-	}
-
-	return sessions, rows.Err()
+	return sessions, nil
 }
 
 // GetActiveSessions retrieves all active sessions for a user
 func (r *SessionRepository) GetActiveSessions(userID uuid.UUID) ([]*storage.Session, error) {
 	query := `
-		SELECT session_id, user_id, is_active, started_date, last_sync_date, end_date
+		SELECT session_id, user_id, is_active, last_sync_date, created_at, expires_at
 		FROM sessions
 		WHERE user_id = $1 AND is_active = true
-		ORDER BY started_date DESC
+		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.Query(query, userID)
+	var sessions []*storage.Session
+	err := r.db.Select(&sessions, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active sessions: %w", err)
 	}
-	defer rows.Close()
 
-	var sessions []*storage.Session
-	for rows.Next() {
-		session := &storage.Session{}
-
-		err := rows.Scan(
-			&session.SessionID,
-			&session.UserID,
-			&session.IsActive,
-			&session.StartedDate,
-			&session.LastSyncDate,
-			&session.EndDate,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan session: %w", err)
-		}
-
-		sessions = append(sessions, session)
-	}
-
-	return sessions, rows.Err()
+	return sessions, nil
 }
 
 // Update updates an existing session
 func (r *SessionRepository) Update(session *storage.Session) error {
 	query := `
 		UPDATE sessions
-		SET is_active = $2, last_sync_date = $3, end_date = $4
-		WHERE session_id = $1
+		SET is_active = :is_active, last_sync_date = :last_sync_date
+		WHERE session_id = :session_id
 	`
 
-	result, err := r.db.Exec(query,
-		session.SessionID,
-		session.IsActive,
-		session.LastSyncDate,
-		session.EndDate,
-	)
-
+	result, err := r.db.NamedExec(query, session)
 	if err != nil {
 		return fmt.Errorf("failed to update session: %w", err)
 	}
@@ -172,9 +127,13 @@ func (r *SessionRepository) Update(session *storage.Session) error {
 
 // Delete removes a session from the database
 func (r *SessionRepository) Delete(sessionID uuid.UUID) error {
-	query := `DELETE FROM sessions WHERE session_id = $1`
+	query := `DELETE FROM sessions WHERE session_id = :session_id`
 
-	result, err := r.db.Exec(query, sessionID)
+	params := map[string]interface{}{
+		"session_id": sessionID,
+	}
+
+	result, err := r.db.NamedExec(query, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}

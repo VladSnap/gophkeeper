@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/VladSnap/gophkeeper/internal/server/storage"
 	"github.com/google/uuid"
@@ -26,16 +27,15 @@ func (r *UserRepository) Create(user *storage.User) error {
 	}
 
 	query := `
-		INSERT INTO users (user_id, login, password)
-		VALUES ($1, $2, $3)
+		INSERT INTO users (user_id, login, password, created_at)
+		VALUES (:user_id, :login, :password, :created_at)
 	`
 
-	_, err := r.db.Exec(query,
-		user.UserID,
-		user.Login,
-		user.Password,
-	)
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = time.Now()
+	}
 
+	_, err := r.db.NamedExec(query, user)
 	if err != nil {
 		return fmt.Errorf("failed to create user: %w", err)
 	}
@@ -46,18 +46,13 @@ func (r *UserRepository) Create(user *storage.User) error {
 // GetByID retrieves a user by its ID
 func (r *UserRepository) GetByID(userID uuid.UUID) (*storage.User, error) {
 	query := `
-		SELECT user_id, login, password
+		SELECT user_id, login, password, created_at
 		FROM users
 		WHERE user_id = $1
 	`
 
 	user := &storage.User{}
-
-	err := r.db.QueryRow(query, userID).Scan(
-		&user.UserID,
-		&user.Login,
-		&user.Password,
-	)
+	err := r.db.Get(user, query, userID)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -72,18 +67,13 @@ func (r *UserRepository) GetByID(userID uuid.UUID) (*storage.User, error) {
 // GetByLogin retrieves a user by login
 func (r *UserRepository) GetByLogin(login string) (*storage.User, error) {
 	query := `
-		SELECT user_id, login, password
+		SELECT user_id, login, password, created_at
 		FROM users
 		WHERE login = $1
 	`
 
 	user := &storage.User{}
-
-	err := r.db.QueryRow(query, login).Scan(
-		&user.UserID,
-		&user.Login,
-		&user.Password,
-	)
+	err := r.db.Get(user, query, login)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -99,16 +89,11 @@ func (r *UserRepository) GetByLogin(login string) (*storage.User, error) {
 func (r *UserRepository) Update(user *storage.User) error {
 	query := `
 		UPDATE users
-		SET login = $2, password = $3
-		WHERE user_id = $1
+		SET login = :login, password = :password
+		WHERE user_id = :user_id
 	`
 
-	result, err := r.db.Exec(query,
-		user.UserID,
-		user.Login,
-		user.Password,
-	)
-
+	result, err := r.db.NamedExec(query, user)
 	if err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
 	}
@@ -127,9 +112,13 @@ func (r *UserRepository) Update(user *storage.User) error {
 
 // Delete removes a user from the database
 func (r *UserRepository) Delete(userID uuid.UUID) error {
-	query := `DELETE FROM users WHERE user_id = $1`
+	query := `DELETE FROM users WHERE user_id = :user_id`
 
-	result, err := r.db.Exec(query, userID)
+	params := map[string]interface{}{
+		"user_id": userID,
+	}
+
+	result, err := r.db.NamedExec(query, params)
 	if err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
