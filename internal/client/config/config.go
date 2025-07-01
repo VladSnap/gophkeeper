@@ -15,6 +15,7 @@ type Config struct {
 	LogLevel     string
 	ServerURL    string
 	Username     string // Current logged in username
+	IsNewUser    bool   // Flag to indicate if this is a new user setup
 }
 
 // NewConfig creates a new configuration with default values
@@ -66,12 +67,13 @@ func getDataDirectory() (string, error) {
 }
 
 // SetUser configures the config for a specific user
-func (c *Config) SetUser(username string) error {
+func (c *Config) SetUser(username string, isNewerUser bool) error {
 	if username == "" {
 		return fmt.Errorf("username cannot be empty")
 	}
 
 	c.Username = username
+	c.IsNewUser = isNewerUser
 
 	// Create user-specific directory using username hash for security
 	userDirName := getUserDirName(username)

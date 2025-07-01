@@ -146,9 +146,9 @@ func (um *UserManager) promptForExistingServerUser(scanner *bufio.Scanner) (stri
 }
 
 // SetupUserEnvironment sets up the environment for a specific user
-func (um *UserManager) SetupUserEnvironment(username string) error {
+func (um *UserManager) SetupUserEnvironment(username string, isNewerUser bool) error {
 	// Configure config for this user
-	if err := um.config.SetUser(username); err != nil {
+	if err := um.config.SetUser(username, isNewerUser); err != nil {
 		return fmt.Errorf("failed to setup user environment: %w", err)
 	}
 
