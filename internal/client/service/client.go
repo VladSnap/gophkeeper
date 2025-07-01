@@ -607,3 +607,49 @@ func (s *ClientService) PerformFullSync(syncService *SyncService, since time.Tim
 	log.Zap.Info("Full sync completed successfully")
 	return nil
 }
+
+// PerformSyncSince выполняет синхронизацию изменений с указанного времени
+func (s *ClientService) PerformSyncSince(syncService *SyncService, since time.Time) error {
+	log.Zap.Debug("Starting sync since specific time", zap.Time("since", since))
+
+	// Шаг 1: Pull - получаем изменения с сервера
+	pullResp, err := syncService.Pull(since)
+	if err != nil {
+		return fmt.Errorf("pull failed: %w", err)
+	}
+
+	log.Zap.Debug("Pull completed",
+		zap.Int("secrets_received", len(pullResp.Secrets)),
+		zap.Int("metadata_received", len(pullResp.Metadata)))
+
+	// Шаг 2: Применяем изменения с сервера локально
+	if len(pullResp.Secrets) > 0 || len(pullResp.Metadata) > 0 {
+		if err := s.SyncFromServer(pullResp.Secrets, pullResp.Metadata); err != nil {
+			return fmt.Errorf("failed to apply server changes: %w", err)
+		}
+	}
+
+	// Шаг 3: Получаем локальные изменения для отправки
+	localSecrets, localMetadata, err := s.GetLocalChangesForPush(since)
+	if err != nil {
+		return fmt.Errorf("failed to get local changes: %w", err)
+	}
+
+	// Шаг 4: Push - отправляем локальные изменения на сервер
+	if len(localSecrets) > 0 || len(localMetadata) > 0 {
+		log.Zap.Debug("Pushing local changes",
+			zap.Int("secrets_to_push", len(localSecrets)),
+			zap.Int("metadata_to_push", len(localMetadata)))
+
+		pushResp, err := syncService.Push(localSecrets, localMetadata)
+		if err != nil {
+			return fmt.Errorf("push failed: %w", err)
+		}
+
+		if !pushResp.Success {
+			log.Zap.Warn("Push completed with warnings", zap.String("message", pushResp.Message))
+		}
+	}
+
+	return nil
+}

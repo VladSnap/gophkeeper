@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/VladSnap/gophkeeper/internal/client/config"
 	"github.com/VladSnap/gophkeeper/internal/client/repository"
@@ -13,13 +14,14 @@ import (
 )
 
 type Application struct {
-	ResMng        *resManager.ResourceManager
-	Cfg           *config.Config
-	UserManager   *service.UserManager
-	Db            *storage.DatabaseClient
-	AuthService   *service.AuthService
-	ClientService *service.ClientService
-	SyncService   *service.SyncService
+	ResMng          *resManager.ResourceManager
+	Cfg             *config.Config
+	UserManager     *service.UserManager
+	Db              *storage.DatabaseClient
+	AuthService     *service.AuthService
+	ClientService   *service.ClientService
+	SyncService     *service.SyncService
+	AutoSyncService *service.AutoSyncService
 }
 
 func New() *Application {
@@ -43,6 +45,9 @@ func (app *Application) Init() error {
 }
 
 func (app *Application) Stop() error {
+	// Останавливаем автоматическую синхронизацию
+	app.StopAutoSync()
+
 	err := app.ResMng.Cleanup()
 	if err != nil {
 		return fmt.Errorf("failed to cleanup resources: %w", err)
@@ -126,7 +131,50 @@ func (app *Application) initUserServices() error {
 	app.AuthService = authService
 	app.ClientService = service.NewClientService(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
 	app.SyncService = service.NewSyncService(app.Cfg.ServerURL, authService)
+	app.AutoSyncService = service.NewAutoSyncService(app.ClientService, app.SyncService)
+
+	// Устанавливаем путь к файлу состояния синхронизации
+	app.AutoSyncService.SetSyncStateFile(app.Cfg.GetUserDataDir())
 
 	log.Zap.Info("Services initialized successfully")
 	return nil
+}
+
+// StartAutoSync запускает автоматическую синхронизацию
+func (app *Application) StartAutoSync() error {
+	if app.AutoSyncService == nil {
+		return fmt.Errorf("auto sync service is not initialized")
+	}
+	return app.AutoSyncService.Start()
+}
+
+// StopAutoSync останавливает автоматическую синхронизацию
+func (app *Application) StopAutoSync() {
+	if app.AutoSyncService != nil {
+		app.AutoSyncService.Stop()
+	}
+}
+
+// IsAutoSyncRunning возвращает статус автоматической синхронизации
+func (app *Application) IsAutoSyncRunning() bool {
+	if app.AutoSyncService == nil {
+		return false
+	}
+	return app.AutoSyncService.IsRunning()
+}
+
+// ForceSync принудительно запускает синхронизацию
+func (app *Application) ForceSync() error {
+	if app.AutoSyncService == nil {
+		return fmt.Errorf("auto sync service is not initialized")
+	}
+	return app.AutoSyncService.ForceSync()
+}
+
+// GetLastSyncTime возвращает время последней синхронизации
+func (app *Application) GetLastSyncTime() time.Time {
+	if app.AutoSyncService == nil {
+		return time.Time{}
+	}
+	return app.AutoSyncService.GetLastSyncTime()
 }

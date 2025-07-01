@@ -56,10 +56,13 @@ func (cli *CLI) Run() error {
 			fmt.Println("2. Full sync (all data)")
 			fmt.Println("3. Create test secret")
 			fmt.Println("4. List secrets")
-			fmt.Println("5. Logout")
-			fmt.Println("6. Lock master password")
-			fmt.Println("7. Change master password")
-			fmt.Println("8. Exit")
+			fmt.Println("5. Auto sync - Start/Stop")
+			fmt.Println("6. Auto sync - Status")
+			fmt.Println("7. Force sync now")
+			fmt.Println("8. Logout")
+			fmt.Println("9. Lock master password")
+			fmt.Println("10. Change master password")
+			fmt.Println("11. Exit")
 		} else if !authService.IsMasterPasswordUnlocked() && authService.IsMasterPasswordSet() {
 			// Master password is locked but user might have stored authentication
 			fmt.Printf("\n=== Gophkeeper Client - %s (Master Password Locked) ===\n",
@@ -127,13 +130,19 @@ func (cli *CLI) handleAuthenticatedChoice(choice string) error {
 		return cli.handleCreateSecret()
 	case "4": // List secrets
 		return cli.handleListSecrets()
-	case "5": // Logout
+	case "5": // Auto sync - Start/Stop
+		return cli.handleToggleAutoSync()
+	case "6": // Auto sync - Status
+		return cli.handleAutoSyncStatus()
+	case "7": // Force sync now
+		return cli.handleForceSync()
+	case "8": // Logout
 		return cli.app.AuthService.Logout()
-	case "6": // Lock master password
+	case "9": // Lock master password
 		return cli.handleLockMasterPassword()
-	case "7": // Change master password
+	case "10": // Change master password
 		return cli.handleChangeMasterPassword()
-	case "8": // Exit
+	case "11": // Exit
 		fmt.Println("Goodbye!")
 		return nil
 	default:
@@ -477,4 +486,49 @@ func (cli *CLI) handleLockedMasterPasswordChoice(choice string) error {
 		fmt.Println("Invalid option")
 		return nil
 	}
+}
+
+// handleToggleAutoSync включает или отключает автоматическую синхронизацию
+func (cli *CLI) handleToggleAutoSync() error {
+	if cli.app.IsAutoSyncRunning() {
+		cli.app.StopAutoSync()
+		fmt.Println("Auto sync stopped successfully!")
+	} else {
+		if err := cli.app.StartAutoSync(); err != nil {
+			return fmt.Errorf("failed to start auto sync: %w", err)
+		}
+		fmt.Println("Auto sync started successfully! Syncing every 10 seconds.")
+	}
+	return nil
+}
+
+// handleAutoSyncStatus показывает статус автоматической синхронизации
+func (cli *CLI) handleAutoSyncStatus() error {
+	isRunning := cli.app.IsAutoSyncRunning()
+	lastSyncTime := cli.app.GetLastSyncTime()
+
+	fmt.Printf("Auto sync status: %s\n", map[bool]string{true: "RUNNING", false: "STOPPED"}[isRunning])
+	if !lastSyncTime.IsZero() {
+		fmt.Printf("Last sync time: %s\n", lastSyncTime.Format("2006-01-02 15:04:05"))
+	} else {
+		fmt.Println("Last sync time: Never")
+	}
+
+	if isRunning {
+		fmt.Println("Sync interval: 10 seconds")
+	}
+
+	return nil
+}
+
+// handleForceSync принудительно запускает синхронизацию
+func (cli *CLI) handleForceSync() error {
+	fmt.Println("Starting force sync...")
+
+	if err := cli.app.ForceSync(); err != nil {
+		return fmt.Errorf("force sync failed: %w", err)
+	}
+
+	fmt.Println("Force sync completed successfully!")
+	return nil
 }
