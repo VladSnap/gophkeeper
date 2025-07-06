@@ -16,7 +16,7 @@ import (
 // AutoSyncService управляет автоматической синхронизацией каждые 10 секунд
 type AutoSyncService struct {
 	clientSyncService *ClientSyncService
-	syncService       *SyncService
+	syncService       *SyncServerClientService
 	syncInterval      time.Duration
 	isRunning         bool
 	mutex             sync.RWMutex
@@ -33,7 +33,7 @@ type SyncState struct {
 }
 
 // NewAutoSyncService создает новый сервис автоматической синхронизации
-func NewAutoSyncService(clientSyncService *ClientSyncService, syncService *SyncService) *AutoSyncService {
+func NewAutoSyncService(clientSyncService *ClientSyncService, syncService *SyncServerClientService) *AutoSyncService {
 	service := &AutoSyncService{
 		clientSyncService: clientSyncService,
 		syncService:       syncService,

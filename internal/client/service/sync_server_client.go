@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// SyncService handles synchronization with the server
-type SyncService struct {
+// SyncServerClientService handles synchronization with the server
+type SyncServerClientService struct {
 	serverURL   string
 	authService *AuthService
 	httpClient  *http.Client
@@ -45,9 +45,9 @@ type PushResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// NewSyncService creates a new sync service
-func NewSyncService(serverURL string, authService *AuthService) *SyncService {
-	return &SyncService{
+// NewSyncServerClientService creates a new sync service
+func NewSyncServerClientService(serverURL string, authService *AuthService) *SyncServerClientService {
+	return &SyncServerClientService{
 		serverURL:   serverURL,
 		authService: authService,
 		httpClient: &http.Client{
@@ -57,7 +57,7 @@ func NewSyncService(serverURL string, authService *AuthService) *SyncService {
 }
 
 // Pull retrieves changes from the server
-func (s *SyncService) Pull(since time.Time) (*PullResponse, error) {
+func (s *SyncServerClientService) Pull(since time.Time) (*PullResponse, error) {
 	req := PullRequest{
 		Since: since,
 	}
@@ -110,7 +110,8 @@ func (s *SyncService) Pull(since time.Time) (*PullResponse, error) {
 }
 
 // Push sends changes to the server
-func (s *SyncService) Push(secrets []*models.Secret, metadata []*models.Metadata) (*PushResponse, error) {
+func (s *SyncServerClientService) Push(secrets []*models.Secret, metadata []*models.Metadata) (
+	*PushResponse, error) {
 	req := PushRequest{
 		Secrets:  secrets,
 		Metadata: metadata,

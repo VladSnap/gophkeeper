@@ -161,7 +161,7 @@ func (css *ClientSyncService) GetChangedDataSince(since time.Time) ([]*models.Se
 }
 
 // PerformSync performs synchronization of the specified type
-func (css *ClientSyncService) PerformSync(syncService *SyncService, syncType SyncType) error {
+func (css *ClientSyncService) PerformSync(syncService *SyncServerClientService, syncType SyncType) error {
 	var since time.Time
 	var syncDescription string
 
@@ -226,7 +226,7 @@ func (css *ClientSyncService) PerformSync(syncService *SyncService, syncType Syn
 
 // PerformFullSync performs full synchronization: pull + push
 // Deprecated: use PerformSync(syncService, SyncTypeFull) instead
-func (css *ClientSyncService) PerformFullSync(syncService *SyncService, since time.Time) error {
+func (css *ClientSyncService) PerformFullSync(syncService *SyncServerClientService, since time.Time) error {
 	log.Zap.Info("Starting full sync", zap.Time("since", since))
 
 	// Step 1: Pull changes from server
@@ -260,7 +260,7 @@ func (css *ClientSyncService) PerformFullSync(syncService *SyncService, since ti
 }
 
 // PerformSyncSince performs synchronization of changes since the specified time
-func (css *ClientSyncService) PerformSyncSince(syncService *SyncService, since time.Time) error {
+func (css *ClientSyncService) PerformSyncSince(syncService *SyncServerClientService, since time.Time) error {
 	log.Zap.Debug("Starting sync since specific time", zap.Time("since", since))
 
 	// Step 1: Pull changes from server
@@ -289,7 +289,7 @@ func (css *ClientSyncService) PerformSyncSince(syncService *SyncService, since t
 }
 
 // performPullStep выполняет шаг получения изменений с сервера
-func (css *ClientSyncService) performPullStep(syncService *SyncService, since time.Time) (*PullResponse, error) {
+func (css *ClientSyncService) performPullStep(syncService *SyncServerClientService, since time.Time) (*PullResponse, error) {
 	pullResp, err := syncService.Pull(since)
 	if err != nil {
 		return nil, fmt.Errorf("pull failed: %w", err)
@@ -322,7 +322,7 @@ func (css *ClientSyncService) performGetLocalChangesStep(since time.Time) ([]*mo
 }
 
 // performPushStep выполняет шаг отправки локальных изменений на сервер
-func (css *ClientSyncService) performPushStep(syncService *SyncService, localSecrets []*models.Secret, localMetadata []*models.Metadata) error {
+func (css *ClientSyncService) performPushStep(syncService *SyncServerClientService, localSecrets []*models.Secret, localMetadata []*models.Metadata) error {
 	if len(localSecrets) > 0 || len(localMetadata) > 0 {
 		log.Zap.Debug("Pushing local changes",
 			zap.Int("secrets_to_push", len(localSecrets)),

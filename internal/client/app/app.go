@@ -20,7 +20,6 @@ type Application struct {
 	Db              *storage.DatabaseClient
 	AuthService     *service.AuthService
 	ServiceFactory  *service.ServiceFactory
-	SyncService     *service.SyncService
 	AutoSyncService *service.AutoSyncService
 }
 
@@ -130,8 +129,8 @@ func (app *Application) initUserServices() error {
 
 	app.AuthService = authService
 	app.ServiceFactory = service.NewServiceFactory(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
-	app.SyncService = service.NewSyncService(app.Cfg.ServerURL, authService)
-	app.AutoSyncService = service.NewAutoSyncService(app.ServiceFactory.ClientSyncService(), app.SyncService)
+	syncServerClientService := service.NewSyncServerClientService(app.Cfg.ServerURL, authService)
+	app.AutoSyncService = service.NewAutoSyncService(app.ServiceFactory.ClientSyncService(), syncServerClientService)
 
 	// Устанавливаем путь к файлу состояния синхронизации
 	app.AutoSyncService.SetSyncStateFile(app.Cfg.GetUserDataDir())
