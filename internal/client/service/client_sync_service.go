@@ -182,10 +182,10 @@ func (css *ClientSyncService) PerformSync(syncService *SyncService, syncType Syn
 		zap.String("type", syncDescription),
 		zap.Time("since", since))
 
-	// Step 1: Pull - get changes from server
-	pullResp, err := syncService.Pull(since)
+	// Step 1: Pull changes from server
+	pullResp, err := css.performPullStep(syncService, since)
 	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+		return err
 	}
 
 	log.Zap.Info("Pull completed",
@@ -194,34 +194,27 @@ func (css *ClientSyncService) PerformSync(syncService *SyncService, syncType Syn
 
 	// Step 2: Apply server changes locally
 	if len(pullResp.Secrets) > 0 || len(pullResp.Metadata) > 0 {
-		if err := css.SyncFromServer(pullResp.Secrets, pullResp.Metadata); err != nil {
-			return fmt.Errorf("failed to apply server changes: %w", err)
+		if err := css.performApplyServerChangesStep(pullResp); err != nil {
+			return err
 		}
 	} else {
 		log.Zap.Info("No changes received from server")
 	}
 
 	// Step 3: Get local changes for push
-	localSecrets, localMetadata, err := css.GetLocalChangesForPush(since)
+	localSecrets, localMetadata, err := css.performGetLocalChangesStep(since)
 	if err != nil {
-		return fmt.Errorf("failed to get local changes: %w", err)
+		return err
 	}
 
-	// Step 4: Push - send local changes to server
+	// Step 4: Push local changes to server
 	if len(localSecrets) > 0 || len(localMetadata) > 0 {
 		log.Zap.Info("Pushing local changes",
 			zap.Int("secrets_to_push", len(localSecrets)),
 			zap.Int("metadata_to_push", len(localMetadata)))
 
-		pushResp, err := syncService.Push(localSecrets, localMetadata)
-		if err != nil {
-			return fmt.Errorf("push failed: %w", err)
-		}
-
-		if !pushResp.Success {
-			log.Zap.Warn("Push completed with warnings", zap.String("message", pushResp.Message))
-		} else {
-			log.Zap.Info("Push completed successfully", zap.String("message", pushResp.Message))
+		if err := css.performPushStep(syncService, localSecrets, localMetadata); err != nil {
+			return err
 		}
 	} else {
 		log.Zap.Info("No local changes to push")
@@ -236,32 +229,27 @@ func (css *ClientSyncService) PerformSync(syncService *SyncService, syncType Syn
 func (css *ClientSyncService) PerformFullSync(syncService *SyncService, since time.Time) error {
 	log.Zap.Info("Starting full sync", zap.Time("since", since))
 
-	// Step 1: Pull - get changes from server
-	pullResp, err := syncService.Pull(since)
+	// Step 1: Pull changes from server
+	pullResp, err := css.performPullStep(syncService, since)
 	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+		return err
 	}
 
 	// Step 2: Apply server changes locally
-	if err := css.SyncFromServer(pullResp.Secrets, pullResp.Metadata); err != nil {
-		return fmt.Errorf("failed to apply server changes: %w", err)
+	if err := css.performApplyServerChangesStep(pullResp); err != nil {
+		return err
 	}
 
 	// Step 3: Get local changes for push
-	localSecrets, localMetadata, err := css.GetLocalChangesForPush(since)
+	localSecrets, localMetadata, err := css.performGetLocalChangesStep(since)
 	if err != nil {
-		return fmt.Errorf("failed to get local changes: %w", err)
+		return err
 	}
 
-	// Step 4: Push - send local changes to server
+	// Step 4: Push local changes to server
 	if len(localSecrets) > 0 || len(localMetadata) > 0 {
-		pushResp, err := syncService.Push(localSecrets, localMetadata)
-		if err != nil {
-			return fmt.Errorf("push failed: %w", err)
-		}
-
-		if !pushResp.Success {
-			log.Zap.Warn("Push completed with warnings", zap.String("message", pushResp.Message))
+		if err := css.performPushStep(syncService, localSecrets, localMetadata); err != nil {
+			return err
 		}
 	} else {
 		log.Zap.Info("No local changes to push")
@@ -275,30 +263,66 @@ func (css *ClientSyncService) PerformFullSync(syncService *SyncService, since ti
 func (css *ClientSyncService) PerformSyncSince(syncService *SyncService, since time.Time) error {
 	log.Zap.Debug("Starting sync since specific time", zap.Time("since", since))
 
-	// Step 1: Pull - get changes from server
+	// Step 1: Pull changes from server
+	pullResp, err := css.performPullStep(syncService, since)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Apply server changes locally
+	if err := css.performApplyServerChangesStep(pullResp); err != nil {
+		return err
+	}
+
+	// Step 3: Get local changes for push
+	localSecrets, localMetadata, err := css.performGetLocalChangesStep(since)
+	if err != nil {
+		return err
+	}
+
+	// Step 4: Push local changes to server
+	if err := css.performPushStep(syncService, localSecrets, localMetadata); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// performPullStep выполняет шаг получения изменений с сервера
+func (css *ClientSyncService) performPullStep(syncService *SyncService, since time.Time) (*PullResponse, error) {
 	pullResp, err := syncService.Pull(since)
 	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
+		return nil, fmt.Errorf("pull failed: %w", err)
 	}
 
 	log.Zap.Debug("Pull completed",
 		zap.Int("secrets_received", len(pullResp.Secrets)),
 		zap.Int("metadata_received", len(pullResp.Metadata)))
 
-	// Step 2: Apply server changes locally
+	return pullResp, nil
+}
+
+// performApplyServerChangesStep выполняет шаг применения изменений с сервера локально
+func (css *ClientSyncService) performApplyServerChangesStep(pullResp *PullResponse) error {
 	if len(pullResp.Secrets) > 0 || len(pullResp.Metadata) > 0 {
 		if err := css.SyncFromServer(pullResp.Secrets, pullResp.Metadata); err != nil {
 			return fmt.Errorf("failed to apply server changes: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Step 3: Get local changes for push
+// performGetLocalChangesStep выполняет шаг получения локальных изменений для отправки
+func (css *ClientSyncService) performGetLocalChangesStep(since time.Time) ([]*models.Secret, []*models.Metadata, error) {
 	localSecrets, localMetadata, err := css.GetLocalChangesForPush(since)
 	if err != nil {
-		return fmt.Errorf("failed to get local changes: %w", err)
+		return nil, nil, fmt.Errorf("failed to get local changes: %w", err)
 	}
+	return localSecrets, localMetadata, nil
+}
 
-	// Step 4: Push - send local changes to server
+// performPushStep выполняет шаг отправки локальных изменений на сервер
+func (css *ClientSyncService) performPushStep(syncService *SyncService, localSecrets []*models.Secret, localMetadata []*models.Metadata) error {
 	if len(localSecrets) > 0 || len(localMetadata) > 0 {
 		log.Zap.Debug("Pushing local changes",
 			zap.Int("secrets_to_push", len(localSecrets)),
@@ -311,8 +335,9 @@ func (css *ClientSyncService) PerformSyncSince(syncService *SyncService, since t
 
 		if !pushResp.Success {
 			log.Zap.Warn("Push completed with warnings", zap.String("message", pushResp.Message))
+		} else {
+			log.Zap.Debug("Push completed successfully", zap.String("message", pushResp.Message))
 		}
 	}
-
 	return nil
 }
