@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/VladSnap/gophkeeper/internal/client/app"
-	"github.com/VladSnap/gophkeeper/internal/client/service"
 	"github.com/VladSnap/gophkeeper/pkg/log"
 	"go.uber.org/zap"
 )
@@ -52,17 +51,15 @@ func (cli *CLI) Run() error {
 		if authService.IsLoggedIn() {
 			fmt.Printf("\n=== Gophkeeper Client - %s (Authenticated) ===\n",
 				authService.GetCurrentUsername())
-			fmt.Println("1. Sync with server (last 24 hours)")
-			fmt.Println("2. Full sync (all data)")
+			fmt.Println("1. Exit")
+			fmt.Println("2. Logout")
 			fmt.Println("3. Create test secret")
 			fmt.Println("4. List secrets")
 			fmt.Println("5. Auto sync - Start/Stop")
 			fmt.Println("6. Auto sync - Status")
 			fmt.Println("7. Force sync now")
-			fmt.Println("8. Logout")
-			fmt.Println("9. Lock master password")
-			fmt.Println("10. Change master password")
-			fmt.Println("11. Exit")
+			fmt.Println("8. Lock master password")
+			fmt.Println("9. Change master password")
 		} else if !authService.IsMasterPasswordUnlocked() && authService.IsMasterPasswordSet() {
 			// Master password is locked but user might have stored authentication
 			fmt.Printf("\n=== Gophkeeper Client - %s (Master Password Locked) ===\n",
@@ -99,7 +96,7 @@ func (cli *CLI) Run() error {
 
 		// Exit conditions
 		if choice == "2" && (!authService.IsLoggedIn() || (!authService.IsMasterPasswordUnlocked() &&
-			authService.IsMasterPasswordSet())) || choice == "8" && authService.IsLoggedIn() {
+			authService.IsMasterPasswordSet())) || choice == "1" && authService.IsLoggedIn() {
 			break
 		}
 	}
@@ -122,10 +119,11 @@ func (cli *CLI) handleUnauthenticatedChoice(choice string) error {
 
 func (cli *CLI) handleAuthenticatedChoice(choice string) error {
 	switch choice {
-	case "1": // Sync
-		return cli.handleSync()
-	case "2": // Full sync
-		return cli.handleFullSync()
+	case "1": // Exit
+		fmt.Println("Goodbye!")
+		return nil
+	case "2": // Logout
+		return cli.app.AuthService.Logout()
 	case "3": // Create secret
 		return cli.handleCreateSecret()
 	case "4": // List secrets
@@ -136,15 +134,10 @@ func (cli *CLI) handleAuthenticatedChoice(choice string) error {
 		return cli.handleAutoSyncStatus()
 	case "7": // Force sync now
 		return cli.handleForceSync()
-	case "8": // Logout
-		return cli.app.AuthService.Logout()
-	case "9": // Lock master password
+	case "8": // Lock master password
 		return cli.handleLockMasterPassword()
-	case "10": // Change master password
+	case "9": // Change master password
 		return cli.handleChangeMasterPassword()
-	case "11": // Exit
-		fmt.Println("Goodbye!")
-		return nil
 	default:
 		fmt.Println("Invalid option")
 		return nil
@@ -181,19 +174,6 @@ func (cli *CLI) handleLogin() error {
 	}
 
 	fmt.Println("Login successful!")
-	return nil
-}
-
-func (cli *CLI) handleSync() error {
-	fmt.Println("Syncing with server...")
-
-	// Выполняем инкрементальную синхронизацию
-	if err := cli.app.ServiceFactory.ClientSyncService().PerformSync(cli.app.SyncService,
-		service.SyncTypeIncremental); err != nil {
-		return fmt.Errorf("sync failed: %w", err)
-	}
-
-	fmt.Println("Sync completed successfully!")
 	return nil
 }
 
@@ -275,18 +255,6 @@ func (cli *CLI) handleListSecrets() error {
 		fmt.Println()
 	}
 
-	return nil
-}
-
-func (cli *CLI) handleFullSync() error {
-	fmt.Println("Performing full synchronization...")
-
-	// Выполняем полную синхронизацию
-	if err := cli.app.ServiceFactory.ClientSyncService().PerformSync(cli.app.SyncService, service.SyncTypeFull); err != nil {
-		return fmt.Errorf("full sync failed: %w", err)
-	}
-
-	fmt.Println("Full synchronization completed successfully!")
 	return nil
 }
 
