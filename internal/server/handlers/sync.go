@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/VladSnap/gophkeeper/internal/server/repository"
+	"github.com/VladSnap/gophkeeper/internal/server/service"
 	"github.com/VladSnap/gophkeeper/internal/server/storage"
 	"github.com/VladSnap/gophkeeper/pkg/log"
 	"github.com/go-chi/chi/v5"
@@ -40,60 +39,14 @@ var ErrUserNotFound = errors.New("user not found in context")
 
 // SyncHandler handles synchronization requests
 type SyncHandler struct {
-	secretRepo   repository.SecretRepositoryInterface
-	metadataRepo repository.MetadataRepositoryInterface
+	syncService service.SyncServiceInterface
 }
 
 // NewSyncHandler creates a new sync handler
-func NewSyncHandler(secretRepo repository.SecretRepositoryInterface, metadataRepo repository.MetadataRepositoryInterface) *SyncHandler {
+func NewSyncHandler(syncService service.SyncServiceInterface) *SyncHandler {
 	return &SyncHandler{
-		secretRepo:   secretRepo,
-		metadataRepo: metadataRepo,
+		syncService: syncService,
 	}
-}
-
-// PullRequest represents a request to pull changes from server
-type PullRequest struct {
-	Since time.Time `json:"since"`
-}
-
-// PullResponse represents a response with changes from server
-type PullResponse struct {
-	Secrets   []*storage.Secret   `json:"secrets"`
-	Metadata  []*storage.Metadata `json:"metadata"`
-	Timestamp time.Time           `json:"timestamp"`
-}
-
-// PushRequest represents a request to push changes to server
-type PushRequest struct {
-	Secrets  []*ClientSecret   `json:"secrets"`
-	Metadata []*ClientMetadata `json:"metadata"`
-}
-
-// ClientSecret represents a secret from client (without user_id)
-type ClientSecret struct {
-	SecretID        uuid.UUID `json:"secret_id"`
-	Encrypted       string    `json:"encrypted"`
-	CreatedDate     time.Time `json:"created_date"`
-	LastUpdatedDate time.Time `json:"last_updated_date"`
-}
-
-// ClientMetadata represents metadata from client
-type ClientMetadata struct {
-	MetadataID      uuid.UUID `json:"metadata_id"`
-	SecretID        uuid.UUID `json:"secret_id"`
-	Key             string    `json:"key"`
-	ValueHash       string    `json:"value_hash"`
-	ValueEncrypted  string    `json:"value_encrypted"`
-	CreatedDate     time.Time `json:"created_date"`
-	LastUpdatedDate time.Time `json:"last_updated_date"`
-}
-
-// PushResponse represents a response after pushing changes
-type PushResponse struct {
-	Success   bool      `json:"success"`
-	Message   string    `json:"message"`
-	Timestamp time.Time `json:"timestamp"`
 }
 
 // Pull handles requests to get changes from server
@@ -117,25 +70,17 @@ func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", userID.String()),
 		zap.Time("since", req.Since))
 
-	// Get changed secrets since the specified time
-	secrets, err := h.secretRepo.GetChangedSince(userID, req.Since)
+	// Get changed data using sync service
+	secrets, metadata, err := h.syncService.PullChanges(userID, req.Since)
 	if err != nil {
-		log.Zap.Error("Failed to get changed secrets", zap.Error(err))
-		http.Error(w, "Failed to retrieve secrets", http.StatusInternalServerError)
-		return
-	}
-
-	// Get changed metadata since the specified time
-	metadata, err := h.metadataRepo.GetChangedSince(userID, req.Since)
-	if err != nil {
-		log.Zap.Error("Failed to get changed metadata", zap.Error(err))
-		http.Error(w, "Failed to retrieve metadata", http.StatusInternalServerError)
+		log.Zap.Error("Failed to pull changes", zap.Error(err))
+		http.Error(w, "Failed to retrieve changes", http.StatusInternalServerError)
 		return
 	}
 
 	response := PullResponse{
-		Secrets:   secrets,
-		Metadata:  metadata,
+		Secrets:   convertSecretsToResponse(secrets),
+		Metadata:  convertMetadataSliceToResponse(metadata),
 		Timestamp: time.Now(),
 	}
 
@@ -174,140 +119,28 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 		zap.Int("secrets_count", len(req.Secrets)),
 		zap.Int("metadata_count", len(req.Metadata)))
 
-	// Process secrets
-	secretsProcessed := 0
-	secretsErrors := 0
-	for _, clientSecret := range req.Secrets {
-		log.Zap.Debug("Processing secret",
-			zap.String("secret_id", clientSecret.SecretID.String()),
-			zap.String("user_id", userID.String()))
-
-		// Convert client secret to server secret with user ID
-		secret := convertClientSecretToServer(clientSecret, userID)
-
-		// Try to get existing secret
-		existingSecret, err := h.secretRepo.GetByID(secret.SecretID)
-		if err != nil {
-			// Secret doesn't exist, create it
-			if err := h.secretRepo.Create(secret); err != nil {
-				log.Zap.Error("Failed to create secret",
-					zap.String("secret_id", secret.SecretID.String()),
-					zap.Error(err))
-				secretsErrors++
-				continue
-			}
-			log.Zap.Debug("Secret created", zap.String("secret_id", secret.SecretID.String()))
-		} else {
-			// Secret exists, check if update is needed
-			// Last Write Wins: сравниваем даты последнего изменения
-			if existingSecret.LastUpdatedDate.Before(secret.LastUpdatedDate) {
-				if err := h.secretRepo.Update(secret); err != nil {
-					log.Zap.Error("Failed to update secret",
-						zap.String("secret_id", secret.SecretID.String()),
-						zap.Error(err))
-					secretsErrors++
-					continue
-				}
-				log.Zap.Debug("Secret updated (client version newer)",
-					zap.String("secret_id", secret.SecretID.String()),
-					zap.Time("server_date", existingSecret.LastUpdatedDate),
-					zap.Time("client_date", secret.LastUpdatedDate))
-			} else if existingSecret.LastUpdatedDate.After(secret.LastUpdatedDate) {
-				log.Zap.Debug("Secret not updated (server version newer)",
-					zap.String("secret_id", secret.SecretID.String()),
-					zap.Time("server_date", existingSecret.LastUpdatedDate),
-					zap.Time("client_date", secret.LastUpdatedDate))
-			} else {
-				log.Zap.Debug("Secret timestamps equal, no update needed",
-					zap.String("secret_id", secret.SecretID.String()))
-			}
-		}
-		secretsProcessed++
+	// Convert handler types to service types
+	serviceSecrets := make([]*service.ClientSecret, len(req.Secrets))
+	for i, secret := range req.Secrets {
+		serviceSecrets[i] = convertSecretRequestToService(secret)
 	}
 
-	// Process metadata
-	metadataProcessed := 0
-	metadataErrors := 0
-	for _, clientMeta := range req.Metadata {
-		log.Zap.Debug("Processing metadata",
-			zap.String("metadata_id", clientMeta.MetadataID.String()),
-			zap.String("secret_id", clientMeta.SecretID.String()))
-
-		// Convert client metadata to server metadata
-		meta := convertClientMetadataToServer(clientMeta)
-
-		// Verify the secret exists and belongs to the user
-		secret, err := h.secretRepo.GetByID(meta.SecretID)
-		if err != nil {
-			log.Zap.Warn("Metadata references non-existent secret",
-				zap.String("metadata_id", meta.MetadataID.String()),
-				zap.String("secret_id", meta.SecretID.String()))
-			metadataErrors++
-			continue
-		}
-
-		if secret.UserID != userID {
-			log.Zap.Warn("Metadata secret user ID mismatch",
-				zap.String("secret_user_id", secret.UserID.String()),
-				zap.String("authenticated_user_id", userID.String()))
-			metadataErrors++
-			continue
-		}
-
-		// Try to get existing metadata
-		existingMeta, err := h.metadataRepo.GetByID(meta.MetadataID)
-		if err != nil {
-			// Metadata doesn't exist, create it
-			if err := h.metadataRepo.Create(meta); err != nil {
-				log.Zap.Error("Failed to create metadata",
-					zap.String("metadata_id", meta.MetadataID.String()),
-					zap.Error(err))
-				metadataErrors++
-				continue
-			}
-			log.Zap.Debug("Metadata created", zap.String("metadata_id", meta.MetadataID.String()))
-		} else {
-			// Metadata exists, check if update is needed
-			// Last Write Wins: сравниваем даты последнего изменения
-			if existingMeta.LastUpdatedDate.Before(meta.LastUpdatedDate) {
-				if err := h.metadataRepo.Update(meta); err != nil {
-					log.Zap.Error("Failed to update metadata",
-						zap.String("metadata_id", meta.MetadataID.String()),
-						zap.Error(err))
-					metadataErrors++
-					continue
-				}
-				log.Zap.Debug("Metadata updated (client version newer)",
-					zap.String("metadata_id", meta.MetadataID.String()),
-					zap.Time("server_date", existingMeta.LastUpdatedDate),
-					zap.Time("client_date", meta.LastUpdatedDate))
-			} else if existingMeta.LastUpdatedDate.After(meta.LastUpdatedDate) {
-				log.Zap.Debug("Metadata not updated (server version newer)",
-					zap.String("metadata_id", meta.MetadataID.String()),
-					zap.Time("server_date", existingMeta.LastUpdatedDate),
-					zap.Time("client_date", meta.LastUpdatedDate))
-			} else {
-				log.Zap.Debug("Metadata timestamps equal, no update needed",
-					zap.String("metadata_id", meta.MetadataID.String()))
-			}
-		}
-		metadataProcessed++
+	serviceMetadata := make([]*service.ClientMetadata, len(req.Metadata))
+	for i, meta := range req.Metadata {
+		serviceMetadata[i] = convertMetadataRequestToService(meta)
 	}
 
-	var message string
-	success := secretsErrors == 0 && metadataErrors == 0
-
-	if success {
-		message = fmt.Sprintf("All changes processed successfully. Secrets: %d processed, Metadata: %d processed",
-			secretsProcessed, metadataProcessed)
-	} else {
-		message = fmt.Sprintf("Processed with errors. Secrets: %d processed, %d errors. Metadata: %d processed, %d errors",
-			secretsProcessed, secretsErrors, metadataProcessed, metadataErrors)
+	// Process changes using sync service
+	result, err := h.syncService.PushChanges(userID, serviceSecrets, serviceMetadata)
+	if err != nil {
+		log.Zap.Error("Failed to push changes", zap.Error(err))
+		http.Error(w, "Failed to process changes", http.StatusInternalServerError)
+		return
 	}
 
 	response := PushResponse{
-		Success:   success,
-		Message:   message,
+		Success:   result.Success,
+		Message:   result.Message,
 		Timestamp: time.Now(),
 	}
 
@@ -345,26 +178,66 @@ func (h *SyncHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/health", h.Health)
 }
 
-// convertClientSecretToServer converts client secret to server secret
-func convertClientSecretToServer(clientSecret *ClientSecret, userID uuid.UUID) *storage.Secret {
-	return &storage.Secret{
-		SecretID:        clientSecret.SecretID,
-		UserID:          userID,
-		Encrypted:       clientSecret.Encrypted,
-		CreatedDate:     clientSecret.CreatedDate,
-		LastUpdatedDate: clientSecret.LastUpdatedDate,
+// convertSecretRequestToService converts handler SecretRequest to service ClientSecret
+func convertSecretRequestToService(req *SecretRequest) *service.ClientSecret {
+	return &service.ClientSecret{
+		SecretID:        req.SecretID,
+		Encrypted:       req.Encrypted,
+		CreatedDate:     req.CreatedDate,
+		LastUpdatedDate: req.LastUpdatedDate,
 	}
 }
 
-// convertClientMetadataToServer converts client metadata to server metadata
-func convertClientMetadataToServer(clientMeta *ClientMetadata) *storage.Metadata {
-	return &storage.Metadata{
-		MetadataID:      clientMeta.MetadataID,
-		SecretID:        clientMeta.SecretID,
-		Key:             clientMeta.Key,
-		ValueHash:       clientMeta.ValueHash,
-		ValueEncrypted:  clientMeta.ValueEncrypted,
-		CreatedDate:     clientMeta.CreatedDate,
-		LastUpdatedDate: clientMeta.LastUpdatedDate,
+// convertMetadataRequestToService converts handler MetadataRequest to service ClientMetadata
+func convertMetadataRequestToService(req *MetadataRequest) *service.ClientMetadata {
+	return &service.ClientMetadata{
+		MetadataID:      req.MetadataID,
+		SecretID:        req.SecretID,
+		Key:             req.Key,
+		ValueHash:       req.ValueHash,
+		ValueEncrypted:  req.ValueEncrypted,
+		CreatedDate:     req.CreatedDate,
+		LastUpdatedDate: req.LastUpdatedDate,
 	}
+}
+
+// convertSecretToResponse converts storage Secret to handler SecretResponse
+func convertSecretToResponse(secret *storage.Secret) *SecretResponse {
+	return &SecretResponse{
+		SecretID:        secret.SecretID,
+		Encrypted:       secret.Encrypted,
+		CreatedDate:     secret.CreatedDate,
+		LastUpdatedDate: secret.LastUpdatedDate,
+	}
+}
+
+// convertMetadataToResponse converts storage Metadata to handler MetadataResponse
+func convertMetadataToResponse(meta *storage.Metadata) *MetadataResponse {
+	return &MetadataResponse{
+		MetadataID:      meta.MetadataID,
+		SecretID:        meta.SecretID,
+		Key:             meta.Key,
+		ValueHash:       meta.ValueHash,
+		ValueEncrypted:  meta.ValueEncrypted,
+		CreatedDate:     meta.CreatedDate,
+		LastUpdatedDate: meta.LastUpdatedDate,
+	}
+}
+
+// convertSecretsToResponse converts slice of storage Secrets to slice of handler SecretResponse
+func convertSecretsToResponse(secrets []*storage.Secret) []*SecretResponse {
+	responses := make([]*SecretResponse, len(secrets))
+	for i, secret := range secrets {
+		responses[i] = convertSecretToResponse(secret)
+	}
+	return responses
+}
+
+// convertMetadataToResponse converts slice of storage Metadata to slice of handler MetadataResponse
+func convertMetadataSliceToResponse(metadata []*storage.Metadata) []*MetadataResponse {
+	responses := make([]*MetadataResponse, len(metadata))
+	for i, meta := range metadata {
+		responses[i] = convertMetadataToResponse(meta)
+	}
+	return responses
 }

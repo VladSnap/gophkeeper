@@ -6,6 +6,7 @@ import (
 
 	"github.com/VladSnap/gophkeeper/internal/server/handlers"
 	"github.com/VladSnap/gophkeeper/internal/server/repository"
+	"github.com/VladSnap/gophkeeper/internal/server/service"
 	"github.com/VladSnap/gophkeeper/internal/server/storage"
 	"github.com/VladSnap/gophkeeper/pkg/log"
 	"github.com/VladSnap/gophkeeper/pkg/resManager"
@@ -130,7 +131,10 @@ func (app *Application) initHandlers() error {
 	jwtSecret := "secret-key"
 
 	app.AuthHandler = handlers.NewAuthHandler(app.UserRepo, app.SessionRepo, jwtSecret)
-	app.SyncHandler = handlers.NewSyncHandler(app.SecretRepo, app.MetadataRepo)
+
+	// Create sync service
+	syncService := service.NewSyncService(app.SecretRepo, app.MetadataRepo)
+	app.SyncHandler = handlers.NewSyncHandler(syncService)
 
 	log.Zap.Info("Handlers initialized successfully")
 	return nil
