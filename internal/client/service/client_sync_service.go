@@ -19,6 +19,19 @@ const (
 	SyncTypeFull
 )
 
+// SyncResult представляет результат синхронизации
+type SyncResult struct {
+	Created int
+	Updated int
+	Errors  int
+}
+
+// SyncReport представляет общий отчет о синхронизации
+type SyncReport struct {
+	Secrets  SyncResult
+	Metadata SyncResult
+}
+
 // ClientSyncService handles synchronization operations
 type ClientSyncService struct {
 	secretsService  *SecretsService
@@ -49,11 +62,25 @@ func (css *ClientSyncService) SyncFromServer(secrets []*models.Secret, metadata 
 		zap.Int("secrets_count", len(secrets)),
 		zap.Int("metadata_count", len(metadata)))
 
-	secretsUpdated := 0
-	secretsCreated := 0
-	secretsErrors := 0
+	// Sync secrets
+	secretsResult := css.syncSecrets(secrets)
 
-	// Process secrets
+	// Sync metadata
+	metadataResult := css.syncMetadata(metadata)
+
+	// Generate and log sync report
+	report := SyncReport{
+		Secrets:  secretsResult,
+		Metadata: metadataResult,
+	}
+
+	return css.generateSyncReport(report)
+}
+
+// syncSecrets синхронизирует секреты с сервера
+func (css *ClientSyncService) syncSecrets(secrets []*models.Secret) SyncResult {
+	result := SyncResult{}
+
 	for _, serverSecret := range secrets {
 		log.Zap.Debug("Processing secret from server",
 			zap.String("secret_id", serverSecret.SecretID.String()),
@@ -64,20 +91,24 @@ func (css *ClientSyncService) SyncFromServer(secrets []*models.Secret, metadata 
 			log.Zap.Error("Failed to upsert secret from server",
 				zap.String("secret_id", serverSecret.SecretID.String()),
 				zap.Error(err))
-			secretsErrors++
+			result.Errors++
 			continue
 		}
 
 		if changed {
-			secretsUpdated++
+			result.Updated++
 		}
 	}
 
-	metadataUpdated := 0
-	metadataCreated := 0
-	metadataErrors := 0
+	// Count created items (approximation - all changed items are considered created for simplicity)
+	result.Created = result.Updated
+	return result
+}
 
-	// Process metadata
+// syncMetadata синхронизирует метаданные с сервера
+func (css *ClientSyncService) syncMetadata(metadata []*models.Metadata) SyncResult {
+	result := SyncResult{}
+
 	for _, serverMeta := range metadata {
 		log.Zap.Debug("Processing metadata from server",
 			zap.String("metadata_id", serverMeta.MetadataID.String()),
@@ -89,30 +120,33 @@ func (css *ClientSyncService) SyncFromServer(secrets []*models.Secret, metadata 
 			log.Zap.Error("Failed to upsert metadata from server",
 				zap.String("metadata_id", serverMeta.MetadataID.String()),
 				zap.Error(err))
-			metadataErrors++
+			result.Errors++
 			continue
 		}
 
 		if changed {
-			metadataUpdated++
+			result.Updated++
 		}
 	}
 
 	// Count created items (approximation - all changed items are considered created for simplicity)
-	secretsCreated = secretsUpdated
-	metadataCreated = metadataUpdated
+	result.Created = result.Updated
+	return result
+}
 
+// generateSyncReport генерирует отчет о синхронизации и возвращает ошибку если есть проблемы
+func (css *ClientSyncService) generateSyncReport(report SyncReport) error {
 	log.Zap.Info("Sync from server completed",
-		zap.Int("secrets_created", secretsCreated),
-		zap.Int("secrets_updated", secretsUpdated),
-		zap.Int("secrets_errors", secretsErrors),
-		zap.Int("metadata_created", metadataCreated),
-		zap.Int("metadata_updated", metadataUpdated),
-		zap.Int("metadata_errors", metadataErrors))
+		zap.Int("secrets_created", report.Secrets.Created),
+		zap.Int("secrets_updated", report.Secrets.Updated),
+		zap.Int("secrets_errors", report.Secrets.Errors),
+		zap.Int("metadata_created", report.Metadata.Created),
+		zap.Int("metadata_updated", report.Metadata.Updated),
+		zap.Int("metadata_errors", report.Metadata.Errors))
 
-	if secretsErrors > 0 || metadataErrors > 0 {
+	if report.Secrets.Errors > 0 || report.Metadata.Errors > 0 {
 		return fmt.Errorf("sync completed with errors: %d secret errors, %d metadata errors",
-			secretsErrors, metadataErrors)
+			report.Secrets.Errors, report.Metadata.Errors)
 	}
 
 	return nil
