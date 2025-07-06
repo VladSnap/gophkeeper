@@ -19,7 +19,7 @@ type Application struct {
 	UserManager     *service.UserManager
 	Db              *storage.DatabaseClient
 	AuthService     *service.AuthService
-	ClientService   *service.ClientService
+	ServiceFactory  *service.ServiceFactory
 	SyncService     *service.SyncService
 	AutoSyncService *service.AutoSyncService
 }
@@ -129,9 +129,9 @@ func (app *Application) initUserServices() error {
 	authService.SetUser(app.Cfg.Username, app.Cfg.GetUserDataDir())
 
 	app.AuthService = authService
-	app.ClientService = service.NewClientService(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
+	app.ServiceFactory = service.NewServiceFactory(secretRepo, metadataRepo, authService.GetMasterPasswordManager())
 	app.SyncService = service.NewSyncService(app.Cfg.ServerURL, authService)
-	app.AutoSyncService = service.NewAutoSyncService(app.ClientService, app.SyncService)
+	app.AutoSyncService = service.NewAutoSyncService(app.ServiceFactory.ClientSyncService(), app.SyncService)
 
 	// Устанавливаем путь к файлу состояния синхронизации
 	app.AutoSyncService.SetSyncStateFile(app.Cfg.GetUserDataDir())

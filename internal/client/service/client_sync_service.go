@@ -9,6 +9,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// SyncType определяет тип синхронизации
+type SyncType int
+
+const (
+	// SyncTypeIncremental - инкрементальная синхронизация (изменения за период)
+	SyncTypeIncremental SyncType = iota
+	// SyncTypeFull - полная синхронизация (все данные)
+	SyncTypeFull
+)
+
 // ClientSyncService handles synchronization operations
 type ClientSyncService struct {
 	secretsService  *SecretsService
@@ -123,6 +133,26 @@ func (css *ClientSyncService) GetLocalChangesForPush(since time.Time) ([]*models
 	}
 
 	log.Zap.Info("Retrieved local changes for push",
+		zap.Time("since", since),
+		zap.Int("secrets_count", len(secrets)),
+		zap.Int("metadata_count", len(metadata)))
+
+	return secrets, metadata, nil
+}
+
+// GetChangedDataSince retrieves all data changed since the specified time
+func (css *ClientSyncService) GetChangedDataSince(since time.Time) ([]*models.Secret, []*models.Metadata, error) {
+	secrets, err := css.secretsService.GetChangedSecretsSince(since)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get changed secrets: %w", err)
+	}
+
+	metadata, err := css.metadataService.GetChangedMetadataSince(since)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get changed metadata: %w", err)
+	}
+
+	log.Zap.Info("Retrieved changed data",
 		zap.Time("since", since),
 		zap.Int("secrets_count", len(secrets)),
 		zap.Int("metadata_count", len(metadata)))

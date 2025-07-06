@@ -15,16 +15,16 @@ import (
 
 // AutoSyncService управляет автоматической синхронизацией каждые 10 секунд
 type AutoSyncService struct {
-	clientService    *ClientService
-	syncService      *SyncService
-	syncInterval     time.Duration
-	isRunning        bool
-	mutex            sync.RWMutex
-	ctx              context.Context
-	cancel           context.CancelFunc
-	lastSyncTime     time.Time
-	lastSyncTimeLock sync.RWMutex
-	syncStateFile    string // Путь к файлу для сохранения состояния
+	clientSyncService *ClientSyncService
+	syncService       *SyncService
+	syncInterval      time.Duration
+	isRunning         bool
+	mutex             sync.RWMutex
+	ctx               context.Context
+	cancel            context.CancelFunc
+	lastSyncTime      time.Time
+	lastSyncTimeLock  sync.RWMutex
+	syncStateFile     string // Путь к файлу для сохранения состояния
 }
 
 // SyncState структура для сохранения состояния синхронизации
@@ -33,11 +33,11 @@ type SyncState struct {
 }
 
 // NewAutoSyncService создает новый сервис автоматической синхронизации
-func NewAutoSyncService(clientService *ClientService, syncService *SyncService) *AutoSyncService {
+func NewAutoSyncService(clientSyncService *ClientSyncService, syncService *SyncService) *AutoSyncService {
 	service := &AutoSyncService{
-		clientService: clientService,
-		syncService:   syncService,
-		syncInterval:  10 * time.Second, // 10 секунд
+		clientSyncService: clientSyncService,
+		syncService:       syncService,
+		syncInterval:      10 * time.Second, // 10 секунд
 	}
 
 	// Устанавливаем путь к файлу состояния (будет установлен позже)
@@ -196,7 +196,7 @@ func (s *AutoSyncService) performIncrementalSync() {
 		zap.Time("last_sync_time", lastSyncTime))
 
 	// Выполняем инкрементальную синхронизацию только изменений с последней синхронизации
-	err := s.clientService.PerformSyncSince(s.syncService, lastSyncTime)
+	err := s.clientSyncService.PerformSyncSince(s.syncService, lastSyncTime)
 	if err != nil {
 		log.Zap.Error("Auto sync failed", zap.Error(err))
 		return
@@ -237,7 +237,7 @@ func (s *AutoSyncService) ForceSync() error {
 	log.Zap.Info("Force sync requested")
 
 	lastSyncTime := s.GetLastSyncTime()
-	err := s.clientService.PerformSyncSince(s.syncService, lastSyncTime)
+	err := s.clientSyncService.PerformSyncSince(s.syncService, lastSyncTime)
 	if err != nil {
 		return err
 	}

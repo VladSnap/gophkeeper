@@ -11,7 +11,6 @@ type ServiceFactory struct {
 	secretsService    *SecretsService
 	metadataService   *MetadataService
 	clientSyncService *ClientSyncService
-	clientService     *ClientService
 }
 
 // NewServiceFactory создает новую фабрику сервисов
@@ -25,14 +24,12 @@ func NewServiceFactory(
 	secretsService := NewSecretsService(secretRepo, cryptoService)
 	metadataService := NewMetadataService(metadataRepo, secretRepo, cryptoService)
 	clientSyncService := NewClientSyncService(secretsService, metadataService, cryptoService)
-	clientService := NewClientService(secretRepo, metadataRepo, masterPasswordManager)
 
 	return &ServiceFactory{
 		cryptoService:     cryptoService,
 		secretsService:    secretsService,
 		metadataService:   metadataService,
 		clientSyncService: clientSyncService,
-		clientService:     clientService,
 	}
 }
 
@@ -54,9 +51,4 @@ func (sf *ServiceFactory) MetadataService() *MetadataService {
 // ClientSyncService возвращает сервис для синхронизации
 func (sf *ServiceFactory) ClientSyncService() *ClientSyncService {
 	return sf.clientSyncService
-}
-
-// ClientService возвращает основной клиентский сервис
-func (sf *ServiceFactory) ClientService() *ClientService {
-	return sf.clientService
 }

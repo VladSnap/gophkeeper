@@ -188,7 +188,7 @@ func (cli *CLI) handleSync() error {
 	fmt.Println("Syncing with server...")
 
 	// Выполняем инкрементальную синхронизацию
-	if err := cli.app.ClientService.PerformSync(cli.app.SyncService,
+	if err := cli.app.ServiceFactory.ClientSyncService().PerformSync(cli.app.SyncService,
 		service.SyncTypeIncremental); err != nil {
 		return fmt.Errorf("sync failed: %w", err)
 	}
@@ -210,9 +210,16 @@ func (cli *CLI) handleCreateSecret() error {
 		"created_by":  "cli",
 	}
 
-	secret, err := cli.app.ClientService.CreateSecret(secretData, metadata)
+	secret, err := cli.app.ServiceFactory.SecretsService().CreateSecret(secretData)
 	if err != nil {
 		return fmt.Errorf("failed to create secret: %w", err)
+	}
+
+	// Add metadata to the secret
+	for key, value := range metadata {
+		if err := cli.app.ServiceFactory.MetadataService().AddMetadata(secret.SecretID, key, value); err != nil {
+			log.Zap.Error("Failed to add metadata", zap.Error(err), zap.String("key", key))
+		}
 	}
 
 	fmt.Printf("Secret created: %s\n", secret.SecretID.String())
@@ -222,7 +229,7 @@ func (cli *CLI) handleCreateSecret() error {
 func (cli *CLI) handleListSecrets() error {
 	fmt.Println("Listing all secrets...")
 
-	secrets, err := cli.app.ClientService.GetAllSecrets()
+	secrets, err := cli.app.ServiceFactory.SecretsService().GetAllSecrets()
 	if err != nil {
 		return fmt.Errorf("failed to get secrets: %w", err)
 	}
@@ -239,7 +246,7 @@ func (cli *CLI) handleListSecrets() error {
 		fmt.Printf("   Last Updated: %s\n", secret.LastUpdatedDate.Format("2006-01-02 15:04:05"))
 
 		// Получаем расшифрованные данные секрета
-		decryptedData, err := cli.app.ClientService.DecryptSecretData(secret.Encrypted)
+		decryptedData, err := cli.app.ServiceFactory.CryptoService().DecryptSecretData(secret.Encrypted)
 		if err != nil {
 			fmt.Printf("   Data: [Error decrypting: %v]\n", err)
 		} else {
@@ -252,19 +259,15 @@ func (cli *CLI) handleListSecrets() error {
 		}
 
 		// Get metadata for this secret
-		metadata, err := cli.app.ClientService.GetMetadataBySecretID(secret.SecretID)
+		metadata, err := cli.app.ServiceFactory.MetadataService().GetMetadataBySecretID(secret.SecretID)
 		if err != nil {
 			fmt.Printf("   Metadata: Error retrieving (%v)\n", err)
 		} else if len(metadata) > 0 {
 			fmt.Printf("   Metadata:\n")
 			for _, meta := range metadata {
 				// Расшифровываем значение метаданных
-				decryptedValue, err := cli.app.ClientService.DecryptMetadataValue(meta.ValueEncrypted)
-				if err != nil {
-					fmt.Printf("     %s: [Error decrypting: %v]\n", meta.Key, err)
-				} else {
-					fmt.Printf("     %s: %s\n", meta.Key, decryptedValue)
-				}
+				decryptedValue := cli.app.ServiceFactory.CryptoService().DecryptMetadataValue(meta.ValueEncrypted)
+				fmt.Printf("     %s: %s\n", meta.Key, decryptedValue)
 			}
 		} else {
 			fmt.Printf("   Metadata: None\n")
@@ -279,7 +282,7 @@ func (cli *CLI) handleFullSync() error {
 	fmt.Println("Performing full synchronization...")
 
 	// Выполняем полную синхронизацию
-	if err := cli.app.ClientService.PerformSync(cli.app.SyncService, service.SyncTypeFull); err != nil {
+	if err := cli.app.ServiceFactory.ClientSyncService().PerformSync(cli.app.SyncService, service.SyncTypeFull); err != nil {
 		return fmt.Errorf("full sync failed: %w", err)
 	}
 
