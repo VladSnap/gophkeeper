@@ -84,8 +84,16 @@ func (s *AutoSyncService) saveSyncState() error {
 		return nil // Нет файла для сохранения
 	}
 
+	// Получаем текущее время синхронизации
+	var currentSyncTime time.Time
+	func() {
+		s.lastSyncTimeLock.RLock()
+		currentSyncTime = s.lastSyncTime
+		s.lastSyncTimeLock.RUnlock()
+	}()
+
 	state := SyncState{
-		LastSyncTime: s.GetLastSyncTime(),
+		LastSyncTime: currentSyncTime,
 	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -161,10 +169,10 @@ func (s *AutoSyncService) GetLastSyncTime() time.Time {
 // setLastSyncTime устанавливает время последней синхронизации
 func (s *AutoSyncService) setLastSyncTime(t time.Time) {
 	s.lastSyncTimeLock.Lock()
-	defer s.lastSyncTimeLock.Unlock()
 	s.lastSyncTime = t
+	s.lastSyncTimeLock.Unlock()
 
-	// Сохраняем состояние в файл
+	// Сохраняем состояние в файл после освобождения блокировки
 	if err := s.saveSyncState(); err != nil {
 		log.Zap.Error("Failed to save sync state", zap.Error(err))
 	}
@@ -236,13 +244,32 @@ func (s *AutoSyncService) SetSyncInterval(interval time.Duration) {
 func (s *AutoSyncService) ForceSync() error {
 	log.Zap.Info("Force sync requested")
 
-	lastSyncTime := s.GetLastSyncTime()
+	// Получаем время последней синхронизации без удержания блокировки
+	var lastSyncTime time.Time
+	func() {
+		s.lastSyncTimeLock.RLock()
+		lastSyncTime = s.lastSyncTime
+		s.lastSyncTimeLock.RUnlock()
+	}()
+
 	err := s.clientSyncService.PerformSyncSince(s.syncService, lastSyncTime)
 	if err != nil {
 		return err
 	}
 
-	s.setLastSyncTime(time.Now())
+	// Обновляем время последней синхронизации
+	newSyncTime := time.Now()
+	func() {
+		s.lastSyncTimeLock.Lock()
+		s.lastSyncTime = newSyncTime
+		s.lastSyncTimeLock.Unlock()
+	}()
+
+	// Сохраняем состояние в файл без удержания блокировки
+	if err := s.saveSyncState(); err != nil {
+		log.Zap.Error("Failed to save sync state", zap.Error(err))
+	}
+
 	log.Zap.Info("Force sync completed successfully")
 	return nil
 }
