@@ -14,11 +14,16 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+// createSHA256Hash создает SHA256 хэш от данных
+func createSHA256Hash(data []byte) []byte {
+	hash := sha256.Sum256(data)
+	return hash[:]
+}
+
 // getSystemInfo получает информацию о системе для создания уникального ключа
 func getSystemInfo() []byte {
 	info := fmt.Sprintf("%s-%s-%s", runtime.GOOS, runtime.GOARCH, os.Getenv("COMPUTERNAME"))
-	hash := sha256.Sum256([]byte(info))
-	return hash[:]
+	return createSHA256Hash([]byte(info))
 }
 
 // GenerateKey создает ключ шифрования на основе данных ПК
@@ -28,20 +33,29 @@ func GenerateKey() []byte {
 	salt := "gophkeeper-client-salt-2025"
 	combined := append(systemInfo, []byte(salt)...)
 
-	hash := sha256.Sum256(combined)
-	return hash[:]
+	return createSHA256Hash(combined)
 }
 
-// Encrypt шифрует данные с использованием AES-GCM
-func Encrypt(data []byte, key []byte) (string, error) {
+// createAESGCM создает AES-GCM шифр
+func createAESGCM(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to create cipher: %w", err)
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	return gcm, nil
+}
+
+// Encrypt шифрует данные с использованием AES-GCM
+func Encrypt(data []byte, key []byte) (string, error) {
+	gcm, err := createAESGCM(key)
+	if err != nil {
+		return "", err
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
@@ -60,14 +74,9 @@ func Decrypt(encryptedHex string, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode hex: %w", err)
 	}
 
-	block, err := aes.NewCipher(key)
+	gcm, err := createAESGCM(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
+		return nil, err
 	}
 
 	nonceSize := gcm.NonceSize()
@@ -120,12 +129,21 @@ func EncryptWithPassword(data []byte, password string) (encryptedData string, sa
 	return encrypted, hex.EncodeToString(saltBytes), nil
 }
 
-// DecryptWithPassword расшифровывает данные с использованием пароля
-func DecryptWithPassword(encryptedData string, password string, saltHex string) ([]byte, error) {
-	// Декодируем соль
+// decodeSalt декодирует соль из hex строки
+func decodeSalt(saltHex string) ([]byte, error) {
 	salt, err := hex.DecodeString(saltHex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode salt: %w", err)
+	}
+	return salt, nil
+}
+
+// DecryptWithPassword расшифровывает данные с использованием пароля
+func DecryptWithPassword(encryptedData string, password string, saltHex string) ([]byte, error) {
+	// Декодируем соль
+	salt, err := decodeSalt(saltHex)
+	if err != nil {
+		return nil, err
 	}
 
 	// Создаем ключ из пароля
@@ -142,8 +160,8 @@ func DecryptWithPassword(encryptedData string, password string, saltHex string) 
 
 // HashValue создает SHA256 хэш от значения
 func HashValue(value string) string {
-	hash := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(hash[:])
+	hash := createSHA256Hash([]byte(value))
+	return hex.EncodeToString(hash)
 }
 
 // ValidatePassword проверяет правильность мастер-пароля
